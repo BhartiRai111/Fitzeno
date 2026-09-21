@@ -1,0 +1,66 @@
+import { Badge } from "@/components/ui/badge";
+
+export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial";
+export type LeadStatus = "new" | "contacted" | "trial-booked" | "trial-attended" | "converted" | "lost";
+export type PaymentStatus = "paid" | "pending" | "failed" | "refunded";
+export type BookingStatus = "booked" | "waitlisted" | "attended" | "cancelled" | "no-show";
+
+const membershipConfig: Record<MembershipStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  active: { label: "Active", variant: "success" },
+  expiring: { label: "Expiring Soon", variant: "warning" },
+  expired: { label: "Expired", variant: "danger" },
+  frozen: { label: "Frozen", variant: "info" },
+  trial: { label: "Trial", variant: "default" },
+};
+
+const leadConfig: Record<LeadStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  new: { label: "New", variant: "info" },
+  contacted: { label: "Contacted", variant: "default" },
+  "trial-booked": { label: "Trial Booked", variant: "warning" },
+  "trial-attended": { label: "Trial Attended", variant: "warning" },
+  converted: { label: "Converted", variant: "success" },
+  lost: { label: "Lost", variant: "danger" },
+};
+
+const paymentConfig: Record<PaymentStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  paid: { label: "Paid", variant: "success" },
+  pending: { label: "Pending", variant: "warning" },
+  failed: { label: "Failed", variant: "danger" },
+  refunded: { label: "Refunded", variant: "info" },
+};
+
+const bookingConfig: Record<BookingStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  booked: { label: "Booked", variant: "success" },
+  waitlisted: { label: "Waitlisted", variant: "warning" },
+  attended: { label: "Attended", variant: "info" },
+  cancelled: { label: "Cancelled", variant: "default" },
+  "no-show": { label: "No-show", variant: "danger" },
+};
+
+export function MembershipStatusBadge({ status }: { status: MembershipStatus }) {
+  const config = membershipConfig[status];
+  return (
+    <Badge variant={config.variant} dot>
+      {config.label}
+    </Badge>
+  );
+}
+
+export function LeadStatusBadge({ status }: { status: LeadStatus }) {
+  const config = leadConfig[status];
+  return <Badge variant={config.variant}>{config.label}</Badge>;
+}
+
+export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
+  const config = paymentConfig[status];
+  return (
+    <Badge variant={config.variant} dot>
+      {config.label}
+    </Badge>
+  );
+}
+
+export function BookingStatusBadge({ status }: { status: BookingStatus }) {
+  const config = bookingConfig[status];
+  return <Badge variant={config.variant}>{config.label}</Badge>;
+}
