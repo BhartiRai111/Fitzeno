@@ -1,7 +1,8 @@
-export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial";
+export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial" | "cancelled";
 export type LeadStatus = "new" | "contacted" | "trial-booked" | "trial-attended" | "converted" | "lost";
 export type PaymentStatus = "paid" | "pending" | "failed" | "refunded";
 export type BookingStatus = "booked" | "waitlisted" | "attended" | "cancelled" | "no-show";
+export type LeadSource = "Website" | "Instagram" | "Referral" | "Walk-in" | "Advertisement";
 
 export interface Trainer {
   id: string;
@@ -78,6 +79,14 @@ export interface Member {
   expiresOn: string;
   lastCheckIn: string;
   lifetimeValue: number;
+  trainerId?: string;
+  paymentStatus: PaymentStatus;
+  attendanceThisMonth: number;
+  gender: "Male" | "Female" | "Other";
+  dob: string;
+  address: string;
+  emergencyContact: string;
+  notes: { id: string; author: string; date: string; text: string }[];
 }
 
 export interface Lead {
@@ -86,13 +95,17 @@ export interface Lead {
   initials: string;
   email: string;
   phone: string;
-  source: "Website" | "Walk-in" | "Referral" | "Instagram" | "Google";
+  source: LeadSource;
+  interest: string;
   status: LeadStatus;
   createdOn: string;
   lastActivity: string;
+  nextFollowUp: string | null;
   assignedTo: string;
   notes: { id: string; author: string; date: string; text: string }[];
 }
+
+export type RevenueCategory = "Membership" | "Personal Training" | "Classes" | "Retail" | "Other";
 
 export interface Payment {
   id: string;
@@ -102,6 +115,7 @@ export interface Payment {
   method: "Card" | "UPI" | "Cash" | "Bank Transfer";
   status: PaymentStatus;
   plan: string;
+  category: RevenueCategory;
   date: string;
   invoiceId: string;
 }
@@ -122,4 +136,64 @@ export interface BookingItem {
   date: string;
   startTime: string;
   status: BookingStatus;
+}
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  initials: string;
+  role: "Manager" | "Front Desk" | "Front Desk / Sales";
+  email: string;
+  phone: string;
+  status: "active" | "invited" | "inactive";
+  joinedOn: string;
+  permissions: string[];
+}
+
+export interface PtSession {
+  id: string;
+  memberName: string;
+  memberInitials: string;
+  trainerId: string;
+  date: string;
+  startTime: string;
+  duration: number;
+  status: BookingStatus;
+  notes?: string;
+}
+
+export interface ClassBooking {
+  id: string;
+  classId: string;
+  memberName: string;
+  memberInitials: string;
+  bookedOn: string;
+  status: BookingStatus;
+}
+
+export interface AttendanceRecord {
+  id: string;
+  memberId: string;
+  memberName: string;
+  memberInitials: string;
+  plan: string;
+  date: string;
+  checkInTime: string;
+  checkOutTime: string | null;
+  method: "QR Check-in" | "Manual" | "Kiosk";
+}
+
+export interface ActivityItem {
+  id: string;
+  type: "member-joined" | "payment" | "booking" | "renewal" | "trainer" | "check-in" | "lead";
+  description: string;
+  person: string;
+  timestamp: string;
+}
+
+export interface AlertItem {
+  id: string;
+  severity: "high" | "medium" | "low";
+  message: string;
+  href: string;
 }

@@ -1,0 +1,57 @@
+import type { AttendanceRecord } from "./types";
+
+export const attendanceRecords: AttendanceRecord[] = [
+  { id: "at-1", memberId: "m-2", memberName: "Tom Bradley", memberInitials: "TB", plan: "Elite", date: "2026-09-21", checkInTime: "06:52", checkOutTime: "08:10", method: "QR Check-in" },
+  { id: "at-2", memberId: "m-6", memberName: "Ravi Shankar", memberInitials: "RS", plan: "Growth", date: "2026-09-21", checkInTime: "07:05", checkOutTime: "08:02", method: "QR Check-in" },
+  { id: "at-3", memberId: "m-13", memberName: "Sofia Almeida", memberInitials: "SA", plan: "Growth", date: "2026-09-21", checkInTime: "07:18", checkOutTime: "08:15", method: "QR Check-in" },
+  { id: "at-4", memberId: "m-7", memberName: "Isabelle Moreau", memberInitials: "IM", plan: "Elite", date: "2026-09-21", checkInTime: "08:02", checkOutTime: "09:10", method: "QR Check-in" },
+  { id: "at-5", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-21", checkInTime: "08:45", checkOutTime: "09:40", method: "QR Check-in" },
+  { id: "at-6", memberId: "m-10", memberName: "Oliver Bennett", memberInitials: "OB", plan: "Elite", date: "2026-09-21", checkInTime: "09:00", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-7", memberId: "m-4", memberName: "Chidi Okafor", memberInitials: "CO", plan: "Growth", date: "2026-09-21", checkInTime: "12:10", checkOutTime: "13:05", method: "Manual" },
+  { id: "at-8", memberId: "m-3", memberName: "Lena Fischer", memberInitials: "LF", plan: "Basic", date: "2026-09-21", checkInTime: "12:30", checkOutTime: "13:20", method: "QR Check-in" },
+  { id: "at-9", memberId: "m-15", memberName: "Zara Ahmed", memberInitials: "ZA", plan: "Elite", date: "2026-09-21", checkInTime: "17:40", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-10", memberId: "m-9", memberName: "Hannah Wu", memberInitials: "HW", plan: "Growth", date: "2026-09-21", checkInTime: "17:55", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-11", memberId: "m-11", memberName: "Nadia Hassan", memberInitials: "NH", plan: "Basic", date: "2026-09-21", checkInTime: "18:02", checkOutTime: null, method: "Kiosk" },
+  { id: "at-12", memberId: "m-14", memberName: "Liam O'Connor", memberInitials: "LO", plan: "Basic", date: "2026-09-21", checkInTime: "18:08", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-19", memberId: "m-5", memberName: "Grace Kim", memberInitials: "GK", plan: "Basic", date: "2026-09-21", checkInTime: "06:40", checkOutTime: "07:25", method: "QR Check-in" },
+  { id: "at-20", memberId: "m-8", memberName: "Marcus Webb Jr.", memberInitials: "MW", plan: "Basic", date: "2026-09-21", checkInTime: "07:30", checkOutTime: "08:20", method: "Manual" },
+  { id: "at-21", memberId: "m-12", memberName: "Ethan Clarke", memberInitials: "EC", plan: "Growth", date: "2026-09-21", checkInTime: "12:45", checkOutTime: "13:30", method: "QR Check-in" },
+  { id: "at-22", memberId: "m-16", memberName: "Ben Foster", memberInitials: "BF", plan: "Growth", date: "2026-09-21", checkInTime: "17:20", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-23", memberId: "m-17", memberName: "Priya Nair", memberInitials: "PN", plan: "Basic", date: "2026-09-21", checkInTime: "18:15", checkOutTime: null, method: "Kiosk" },
+  { id: "at-24", memberId: "m-15", memberName: "Zara Ahmed", memberInitials: "ZA", plan: "Elite", date: "2026-09-21", checkInTime: "19:00", checkOutTime: null, method: "QR Check-in" },
+  { id: "at-13", memberId: "m-2", memberName: "Tom Bradley", memberInitials: "TB", plan: "Elite", date: "2026-09-20", checkInTime: "07:00", checkOutTime: "08:20", method: "QR Check-in" },
+  { id: "at-14", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-20", checkInTime: "08:30", checkOutTime: "09:25", method: "QR Check-in" },
+  { id: "at-15", memberId: "m-7", memberName: "Isabelle Moreau", memberInitials: "IM", plan: "Elite", date: "2026-09-20", checkInTime: "09:00", checkOutTime: "10:00", method: "QR Check-in" },
+  { id: "at-16", memberId: "m-13", memberName: "Sofia Almeida", memberInitials: "SA", plan: "Growth", date: "2026-09-19", checkInTime: "07:10", checkOutTime: "08:05", method: "QR Check-in" },
+  { id: "at-17", memberId: "m-10", memberName: "Oliver Bennett", memberInitials: "OB", plan: "Elite", date: "2026-09-19", checkInTime: "18:00", checkOutTime: "19:15", method: "QR Check-in" },
+  { id: "at-18", memberId: "m-6", memberName: "Ravi Shankar", memberInitials: "RS", plan: "Growth", date: "2026-09-18", checkInTime: "07:00", checkOutTime: "07:55", method: "QR Check-in" },
+];
+
+export const peakHours = [
+  { hour: "6am", visits: 22 },
+  { hour: "7am", visits: 48 },
+  { hour: "8am", visits: 40 },
+  { hour: "9am", visits: 26 },
+  { hour: "10am", visits: 14 },
+  { hour: "11am", visits: 10 },
+  { hour: "12pm", visits: 24 },
+  { hour: "1pm", visits: 18 },
+  { hour: "2pm", visits: 9 },
+  { hour: "3pm", visits: 8 },
+  { hour: "4pm", visits: 15 },
+  { hour: "5pm", visits: 38 },
+  { hour: "6pm", visits: 52 },
+  { hour: "7pm", visits: 44 },
+  { hour: "8pm", visits: 21 },
+  { hour: "9pm", visits: 10 },
+];
+
+export const weeklyAttendance = [
+  { day: "Mon", visits: 312 },
+  { day: "Tue", visits: 298 },
+  { day: "Wed", visits: 276 },
+  { day: "Thu", visits: 304 },
+  { day: "Fri", visits: 285 },
+  { day: "Sat", visits: 198 },
+  { day: "Sun", visits: 142 },
+];

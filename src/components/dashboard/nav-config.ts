@@ -3,11 +3,11 @@ import {
   LayoutDashboard,
   Users,
   UserPlus,
+  CreditCard,
   CalendarDays,
   Dumbbell,
   Wallet,
   ClipboardCheck,
-  Tag,
   BarChart3,
   Settings,
   QrCode,
@@ -30,34 +30,37 @@ export interface NavSection {
 
 export const ownerNavSections: NavSection[] = [
   {
-    items: [{ label: "Overview", href: "/owner", icon: LayoutDashboard }],
+    items: [{ label: "Dashboard", href: "/owner", icon: LayoutDashboard }],
   },
   {
     title: "People",
     items: [
       { label: "Members", href: "/owner/members", icon: Users },
-      { label: "Leads & Enquiries", href: "/owner/leads", icon: UserPlus },
+      { label: "Leads", href: "/owner/leads", icon: UserPlus },
       { label: "Trainers & Staff", href: "/owner/staff", icon: UserCircle },
     ],
   },
   {
     title: "Operations",
     items: [
+      { label: "Memberships", href: "/owner/memberships", icon: CreditCard },
       { label: "Classes & Schedule", href: "/owner/classes", icon: CalendarDays },
       { label: "Attendance", href: "/owner/attendance", icon: ClipboardCheck },
-      { label: "Offers & Promotions", href: "/owner/offers", icon: Tag },
     ],
   },
   {
     title: "Finance",
     items: [
-      { label: "Payments & Revenue", href: "/owner/payments", icon: Wallet },
+      { label: "Payments & Billing", href: "/owner/payments", icon: Wallet },
       { label: "Reports & Analytics", href: "/owner/reports", icon: BarChart3 },
     ],
   },
   {
     title: "Workspace",
-    items: [{ label: "Settings", href: "/owner/settings", icon: Settings }],
+    items: [
+      { label: "Notifications", href: "/owner/notifications", icon: Bell },
+      { label: "Settings", href: "/owner/settings", icon: Settings },
+    ],
   },
 ];
 

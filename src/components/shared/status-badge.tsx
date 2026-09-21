@@ -1,9 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-
-export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial";
-export type LeadStatus = "new" | "contacted" | "trial-booked" | "trial-attended" | "converted" | "lost";
-export type PaymentStatus = "paid" | "pending" | "failed" | "refunded";
-export type BookingStatus = "booked" | "waitlisted" | "attended" | "cancelled" | "no-show";
+import type { MembershipStatus, LeadStatus, PaymentStatus, BookingStatus } from "@/lib/data/types";
 
 const membershipConfig: Record<MembershipStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
   active: { label: "Active", variant: "success" },
@@ -11,6 +7,7 @@ const membershipConfig: Record<MembershipStatus, { label: string; variant: "succ
   expired: { label: "Expired", variant: "danger" },
   frozen: { label: "Frozen", variant: "info" },
   trial: { label: "Trial", variant: "default" },
+  cancelled: { label: "Cancelled", variant: "default" },
 };
 
 const leadConfig: Record<LeadStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {

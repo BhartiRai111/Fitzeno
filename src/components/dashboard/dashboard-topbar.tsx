@@ -112,6 +112,13 @@ export function DashboardTopbar({
                 ))}
               </div>
             </ScrollArea>
+            <div className="border-t border-border p-2">
+              <Button variant="ghost" size="sm" className="w-full" asChild>
+                <Link href={role === "owner" ? "/owner/notifications" : "/portal/notifications"}>
+                  View all notifications
+                </Link>
+              </Button>
+            </div>
           </PopoverContent>
         </Popover>
 

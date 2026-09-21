@@ -3,10 +3,21 @@
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { revenueByMonth } from "@/lib/data/payments";
 
-export function RevenueChart() {
+interface RevenueChartProps {
+  data?: { revenue: number; [key: string]: string | number }[];
+  xKey?: string;
+  height?: number;
+}
+
+export function RevenueChart({ data = revenueByMonth, xKey = "month", height = 240 }: RevenueChartProps) {
+  const max = Math.max(...data.map((d) => d.revenue), 1);
+  const useThousands = max >= 2000;
+  const formatValue = (value: number) =>
+    useThousands ? `£${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k` : `£${value}`;
+
   return (
-    <ResponsiveContainer width="100%" height={240}>
-      <AreaChart data={revenueByMonth} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.28} />
@@ -15,16 +26,17 @@ export function RevenueChart() {
         </defs>
         <CartesianGrid vertical={false} strokeDasharray="4 8" stroke="var(--color-border)" />
         <XAxis
-          dataKey="month"
+          dataKey={xKey}
           axisLine={false}
           tickLine={false}
           tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }}
+          interval="preserveStartEnd"
         />
         <YAxis
           axisLine={false}
           tickLine={false}
           tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }}
-          tickFormatter={(value) => `£${value / 1000}k`}
+          tickFormatter={(value) => formatValue(value)}
           width={56}
         />
         <Tooltip

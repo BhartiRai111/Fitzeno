@@ -1,0 +1,48 @@
+import type { StaffMember } from "./types";
+
+export const staffMembers: StaffMember[] = [
+  {
+    id: "st-1",
+    name: "Sam Carter",
+    initials: "SC",
+    role: "Manager",
+    email: "sam.carter@fitzeno.app",
+    phone: "+44 7700 800001",
+    status: "active",
+    joinedOn: "2019-06-01",
+    permissions: ["Full access", "Billing", "Staff management"],
+  },
+  {
+    id: "st-2",
+    name: "Ella Whitfield",
+    initials: "EW",
+    role: "Front Desk",
+    email: "ella.whitfield@fitzeno.app",
+    phone: "+44 7700 800002",
+    status: "active",
+    joinedOn: "2023-02-14",
+    permissions: ["Check-ins", "Leads", "Trial scheduling"],
+  },
+  {
+    id: "st-3",
+    name: "Noah Patterson",
+    initials: "NP",
+    role: "Front Desk / Sales",
+    email: "noah.patterson@fitzeno.app",
+    phone: "+44 7700 800003",
+    status: "active",
+    joinedOn: "2024-05-20",
+    permissions: ["Check-ins", "Leads", "Membership sales"],
+  },
+  {
+    id: "st-4",
+    name: "Ruby Simmons",
+    initials: "RS",
+    role: "Front Desk",
+    email: "ruby.simmons@fitzeno.app",
+    phone: "+44 7700 800004",
+    status: "invited",
+    joinedOn: "2026-09-18",
+    permissions: ["Check-ins", "Leads"],
+  },
+];

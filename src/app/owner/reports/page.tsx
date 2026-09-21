@@ -1,12 +1,10 @@
-import { BarChart3 } from "lucide-react";
-import { ComingSoon } from "@/components/shared/coming-soon";
+import { Suspense } from "react";
+import { ReportsPageClient } from "./page-client";
 
 export default function OwnerReportsPage() {
   return (
-    <ComingSoon
-      icon={BarChart3}
-      title="Reports & Analytics"
-      description="Revenue, retention, class performance, and attendance trend reports."
-    />
+    <Suspense>
+      <ReportsPageClient />
+    </Suspense>
   );
 }
