@@ -108,6 +108,7 @@ export function ClassesPageClient() {
                       <th className="px-4 py-3 font-medium">Class</th>
                       <th className="px-4 py-3 font-medium">Booked on</th>
                       <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium" />
                     </tr>
                   </thead>
                   <tbody>
@@ -126,6 +127,18 @@ export function ClassesPageClient() {
                           <td className="px-4 py-3 text-muted-foreground">{gymClass?.name}</td>
                           <td className="px-4 py-3 text-muted-foreground">{formatDate(booking.bookedOn)}</td>
                           <td className="px-4 py-3"><BookingStatusBadge status={booking.status} /></td>
+                          <td className="px-4 py-3 text-right">
+                            {(booking.status === "booked" || booking.status === "waitlisted") && (
+                              <ConfirmActionDialog
+                                trigger={<Button size="sm" variant="ghost" className="text-destructive">Cancel</Button>}
+                                title={`Cancel ${booking.memberName}'s booking?`}
+                                description={`They'll be removed from ${gymClass?.name ?? "this class"} and notified.`}
+                                confirmLabel="Cancel Booking"
+                                destructive
+                                onConfirm={() => toast.success(`${booking.memberName}'s booking cancelled`)}
+                              />
+                            )}
+                          </td>
                         </tr>
                       );
                     })}

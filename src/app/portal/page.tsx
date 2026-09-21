@@ -1,8 +1,12 @@
+"use client";
+
+import * as React from "react";
 import Link from "next/link";
 import {
   CalendarCheck,
   QrCode,
   Dumbbell,
+  UserRound,
   Flame,
   TrendingUp,
   ArrowRight,
@@ -18,9 +22,13 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { BookingStatusBadge } from "@/components/shared/status-badge";
-import { upcomingBookings, memberNotifications } from "@/lib/data/notifications";
+import { EmptyState } from "@/components/shared/empty-state";
+import { BookPtDialog } from "@/components/portal/book-pt-dialog";
+import { useBookings } from "@/components/portal/bookings-provider";
+import { memberNotifications } from "@/lib/data/notifications";
 import { trainers } from "@/lib/data/trainers";
 import { daysBetween } from "@/lib/utils-data";
+import { formatOccurrence } from "@/lib/booking-helpers";
 
 const currentMember = {
   name: "Aisha Patel",
@@ -32,10 +40,59 @@ const currentMember = {
 const weeklyVisits = [3, 4, 2, 5, 4, 6, 3];
 
 export default function MemberDashboardPage() {
+  const { myClassBookings, myPtSessions } = useBookings();
+  const [ptDialogOpen, setPtDialogOpen] = React.useState(false);
+  const [ptPreselectTrainer, setPtPreselectTrainer] = React.useState<string | undefined>();
+
   const daysLeft = daysBetween("2026-09-21", currentMember.expiresOnRaw);
   const isExpiringSoon = daysLeft <= 14;
   const favoriteTrainer = trainers[0];
   const maxVisits = Math.max(...weeklyVisits);
+
+  const upcomingClassItems = myClassBookings
+    .filter((v) => v.booking.status === "booked")
+    .map((v) => ({
+      key: v.booking.id,
+      label: v.gymClass.name,
+      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`,
+      status: "booked" as const,
+      sortKey: `${v.occurrenceDate}${v.gymClass.startTime}`,
+    }));
+  const upcomingPtItems = myPtSessions
+    .filter((s) => s.status === "booked")
+    .map((s) => ({
+      key: s.id,
+      label: "Personal Training",
+      sublabel: `with ${trainers.find((t) => t.id === s.trainerId)?.name} · ${s.date} · ${s.startTime}`,
+      status: "booked" as const,
+      sortKey: `${s.date}${s.startTime}`,
+    }));
+  const waitlistedItems = myClassBookings
+    .filter((v) => v.booking.status === "waitlisted")
+    .map((v) => ({
+      key: v.booking.id,
+      label: v.gymClass.name,
+      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`,
+      status: "waitlisted" as const,
+      sortKey: `${v.occurrenceDate}${v.gymClass.startTime}`,
+    }));
+  const nextUp = [...upcomingClassItems, ...upcomingPtItems, ...waitlistedItems]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .slice(0, 3);
+
+  const nextWithFavorite = [
+    ...myClassBookings
+      .filter((v) => v.booking.status === "booked" && v.gymClass.trainerId === favoriteTrainer.id)
+      .map((v) => ({ label: `${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`, sortKey: `${v.occurrenceDate}${v.gymClass.startTime}` })),
+    ...myPtSessions
+      .filter((s) => s.status === "booked" && s.trainerId === favoriteTrainer.id)
+      .map((s) => ({ label: `${s.date} · ${s.startTime}`, sortKey: `${s.date}${s.startTime}` })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey))[0];
+
+  function openPtBooking(trainerId?: string) {
+    setPtPreselectTrainer(trainerId);
+    setPtDialogOpen(true);
+  }
 
   return (
     <div className="space-y-6">
@@ -78,23 +135,30 @@ export default function MemberDashboardPage() {
             <CardDescription>Your upcoming bookings</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {upcomingBookings.map((booking) => (
-              <div
-                key={booking.id}
-                className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5 transition-colors hover:bg-muted/40"
-              >
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
-                  <Dumbbell className="size-[18px]" />
+            {nextUp.length === 0 ? (
+              <EmptyState
+                icon={Dumbbell}
+                title="Nothing booked yet"
+                description="Book a class or a PT session to see it here."
+                action={{ label: "Browse Classes", href: "/portal/classes" }}
+              />
+            ) : (
+              nextUp.map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5 transition-colors hover:bg-muted/40"
+                >
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
+                    <Dumbbell className="size-[18px]" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">{item.label}</p>
+                    <p className="truncate text-xs text-muted-foreground">{item.sublabel}</p>
+                  </div>
+                  <BookingStatusBadge status={item.status} />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">{booking.className}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    with {booking.trainerName} · {booking.date} · {booking.startTime}
-                  </p>
-                </div>
-                <BookingStatusBadge status={booking.status} />
-              </div>
-            ))}
+              ))
+            )}
             <Button variant="outline" size="sm" className="w-full" asChild>
               <Link href="/portal/bookings">
                 View all bookings
@@ -106,19 +170,28 @@ export default function MemberDashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Book a Class", icon: CalendarCheck, href: "/portal/classes" },
-          { label: "Check In", icon: QrCode, href: "/portal/check-in" },
-          { label: "View Membership", icon: TrendingUp, href: "/portal/membership" },
-          { label: "Book PT Session", icon: Dumbbell, href: "/portal/bookings" },
-        ].map((action) => (
-          <Button key={action.label} variant="outline" className="h-auto flex-col gap-2 py-4" asChild>
-            <Link href={action.href}>
-              <action.icon className="size-5 text-primary" />
-              <span className="text-sm font-medium">{action.label}</span>
-            </Link>
-          </Button>
-        ))}
+        <Button variant="outline" className="h-auto flex-col gap-2 py-4" asChild>
+          <Link href="/portal/classes">
+            <CalendarCheck className="size-5 text-primary" />
+            <span className="text-sm font-medium">Book a Class</span>
+          </Link>
+        </Button>
+        <Button variant="outline" className="h-auto flex-col gap-2 py-4" asChild>
+          <Link href="/portal/check-in">
+            <QrCode className="size-5 text-primary" />
+            <span className="text-sm font-medium">Check In</span>
+          </Link>
+        </Button>
+        <Button variant="outline" className="h-auto flex-col gap-2 py-4" asChild>
+          <Link href="/portal/membership">
+            <TrendingUp className="size-5 text-primary" />
+            <span className="text-sm font-medium">View Membership</span>
+          </Link>
+        </Button>
+        <Button variant="outline" className="h-auto flex-col gap-2 py-4" onClick={() => openPtBooking()}>
+          <UserRound className="size-5 text-primary" />
+          <span className="text-sm font-medium">Book PT Session</span>
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -169,14 +242,19 @@ export default function MemberDashboardPage() {
             <div className="mt-4 space-y-2 text-sm text-muted-foreground">
               <div className="flex items-center gap-2">
                 <Clock className="size-4" />
-                Next session: Fri 09:00
+                {nextWithFavorite ? `Next session: ${nextWithFavorite.label}` : "No sessions booked yet"}
               </div>
               <div className="flex items-center gap-2">
                 <MapPin className="size-4" />
                 Strength Floor
               </div>
             </div>
-            <Button variant="outline" size="sm" className="mt-4 w-full">
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-4 w-full"
+              onClick={() => openPtBooking(favoriteTrainer.id)}
+            >
               Book with {favoriteTrainer.name.split(" ")[0]}
             </Button>
           </CardContent>
@@ -242,6 +320,8 @@ export default function MemberDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <BookPtDialog open={ptDialogOpen} onOpenChange={setPtDialogOpen} preselectedTrainerId={ptPreselectTrainer} />
     </div>
   );
 }

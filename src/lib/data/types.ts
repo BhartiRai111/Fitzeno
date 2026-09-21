@@ -152,6 +152,7 @@ export interface StaffMember {
 
 export interface PtSession {
   id: string;
+  memberId?: string;
   memberName: string;
   memberInitials: string;
   trainerId: string;
@@ -165,10 +166,19 @@ export interface PtSession {
 export interface ClassBooking {
   id: string;
   classId: string;
+  memberId?: string;
   memberName: string;
   memberInitials: string;
   bookedOn: string;
   status: BookingStatus;
+}
+
+export interface TrainerAvailabilitySlot {
+  id: string;
+  trainerId: string;
+  day: GymClass["day"];
+  startTime: string;
+  endTime: string;
 }
 
 export interface AttendanceRecord {

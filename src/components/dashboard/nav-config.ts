@@ -15,6 +15,7 @@ import {
   TrendingUp,
   Bell,
   UserCircle,
+  CalendarClock,
 } from "lucide-react";
 
 export interface NavItem {
@@ -73,4 +74,10 @@ export const memberNavItems: NavItem[] = [
   { label: "Progress", href: "/portal/progress", icon: TrendingUp },
   { label: "Notifications", href: "/portal/notifications", icon: Bell },
   { label: "Profile", href: "/portal/profile", icon: UserCircle },
+];
+
+export const trainerNavItems: NavItem[] = [
+  { label: "Dashboard", href: "/trainer", icon: LayoutDashboard },
+  { label: "My Schedule", href: "/trainer/schedule", icon: CalendarDays },
+  { label: "Availability", href: "/trainer/availability", icon: CalendarClock },
 ];

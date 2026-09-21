@@ -16,6 +16,13 @@ export const memberNotifications: NotificationItem[] = [
   { id: "mn-5", type: "payment", title: "Payment receipt", description: "Receipt for £69 (Growth plan) is ready to download.", timestamp: "3 days ago", read: true },
 ];
 
+export const trainerNotifications: NotificationItem[] = [
+  { id: "tn-1", type: "booking", title: "New PT booking", description: "Aisha Patel booked a session with you for Fri 11:00.", timestamp: "20 min ago", read: false },
+  { id: "tn-2", type: "booking", title: "Session cancelled", description: "Chidi Okafor cancelled Thursday's 09:00 session.", timestamp: "2 hours ago", read: false },
+  { id: "tn-3", type: "alert", title: "Class nearly full", description: "Your Power Hour HIIT class is at 16/16 with a waitlist of 4.", timestamp: "5 hours ago", read: true },
+  { id: "tn-4", type: "system", title: "Availability reminder", description: "You haven't set availability for next week yet.", timestamp: "Yesterday", read: true },
+];
+
 export const upcomingBookings: BookingItem[] = [
   { id: "b-1", className: "Strength Fundamentals", trainerName: "Maya Okonkwo", date: "Fri, Sep 25", startTime: "09:00", status: "booked" },
   { id: "b-2", className: "Vinyasa Flow", trainerName: "Priya Chandran", date: "Fri, Sep 25", startTime: "17:30", status: "booked" },

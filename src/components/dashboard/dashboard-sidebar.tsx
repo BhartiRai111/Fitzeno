@@ -9,22 +9,27 @@ import { LogoMark } from "@/components/brand/logo-mark";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { ownerNavSections, memberNavItems } from "@/components/dashboard/nav-config";
+import { ownerNavSections, memberNavItems, trainerNavItems } from "@/components/dashboard/nav-config";
 
 interface DashboardSidebarProps {
-  role: "owner" | "member";
+  role: "owner" | "member" | "trainer";
   className?: string;
 }
 
 function isActive(pathname: string, href: string) {
-  if (href === "/owner" || href === "/portal") return pathname === href;
+  if (href === "/owner" || href === "/portal" || href === "/trainer") return pathname === href;
   return pathname === href || pathname.startsWith(href + "/");
 }
 
 export function DashboardSidebar({ role, className }: DashboardSidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
-  const sections = role === "owner" ? ownerNavSections : [{ items: memberNavItems }];
+  const sections =
+    role === "owner"
+      ? ownerNavSections
+      : role === "trainer"
+        ? [{ items: trainerNavItems }]
+        : [{ items: memberNavItems }];
 
   return (
     <aside

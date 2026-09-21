@@ -111,6 +111,9 @@ export default function LoginPage() {
               <Button asChild size="sm" variant="outline">
                 <Link href="/owner">Owner Dashboard</Link>
               </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/trainer">Trainer Portal</Link>
+              </Button>
             </div>
           </div>
         </div>

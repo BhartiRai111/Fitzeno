@@ -1,27 +1,36 @@
 "use client";
 
 import * as React from "react";
+import { toast } from "sonner";
 import { Star, Mail, Phone } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { BookingStatusBadge } from "@/components/shared/status-badge";
 import { AddTrainerDialog } from "@/components/dashboard/dialogs/add-trainer-dialog";
 import { InviteStaffDialog } from "@/components/dashboard/dialogs/invite-staff-dialog";
+import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { trainers } from "@/lib/data/trainers";
 import { staffMembers } from "@/lib/data/staff";
 import { gymClasses, daysOfWeek } from "@/lib/data/classes";
 import { trainerPerformance } from "@/lib/data/reports";
-import { ptSessions } from "@/lib/data/pt-sessions";
+import { ptSessions as initialPtSessions } from "@/lib/data/pt-sessions";
 import { formatDate } from "@/lib/utils-data";
 
 type TabValue = "trainers" | "staff" | "schedules" | "pt";
 
 export function StaffPageClient() {
   const [tab, setTab] = React.useState<TabValue>("trainers");
+  const [ptSessions, setPtSessions] = React.useState(initialPtSessions);
+
+  function markPtStatus(sessionId: string, status: "attended" | "cancelled" | "no-show") {
+    setPtSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, status } : s)));
+    toast.success(status === "attended" ? "Marked as attended" : status === "no-show" ? "Marked as no-show" : "Session cancelled");
+  }
 
   return (
     <div className="space-y-6">
@@ -190,6 +199,7 @@ export function StaffPageClient() {
                     <th className="px-4 py-3 font-medium">Time</th>
                     <th className="px-4 py-3 font-medium">Duration</th>
                     <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium" />
                   </tr>
                 </thead>
                 <tbody>
@@ -210,6 +220,23 @@ export function StaffPageClient() {
                         <td className="px-4 py-3 text-muted-foreground">{session.startTime}</td>
                         <td className="px-4 py-3 text-muted-foreground">{session.duration} min</td>
                         <td className="px-4 py-3"><BookingStatusBadge status={session.status} /></td>
+                        <td className="px-4 py-3 text-right">
+                          {session.status === "booked" && (
+                            <div className="flex justify-end gap-1">
+                              <Button size="sm" variant="ghost" onClick={() => markPtStatus(session.id, "attended")}>
+                                Mark Attended
+                              </Button>
+                              <ConfirmActionDialog
+                                trigger={<Button size="sm" variant="ghost" className="text-destructive">Cancel</Button>}
+                                title="Cancel this session?"
+                                description={`${session.memberName}'s session with ${trainer?.name} will be released.`}
+                                confirmLabel="Cancel Session"
+                                destructive
+                                onConfirm={() => markPtStatus(session.id, "cancelled")}
+                              />
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

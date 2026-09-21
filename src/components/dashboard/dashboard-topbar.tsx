@@ -31,11 +31,11 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Logo } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
-import { ownerNavSections, memberNavItems } from "@/components/dashboard/nav-config";
+import { ownerNavSections, memberNavItems, trainerNavItems } from "@/components/dashboard/nav-config";
 import type { NotificationItem } from "@/lib/data/types";
 
 interface DashboardTopbarProps {
-  role: "owner" | "member";
+  role: "owner" | "member" | "trainer";
   roleLabel: string;
   userName: string;
   userInitials: string;
@@ -44,8 +44,14 @@ interface DashboardTopbarProps {
 }
 
 function isActive(pathname: string, href: string) {
-  if (href === "/owner" || href === "/portal") return pathname === href;
+  if (href === "/owner" || href === "/portal" || href === "/trainer") return pathname === href;
   return pathname === href || pathname.startsWith(href + "/");
+}
+
+function notificationsHref(role: DashboardTopbarProps["role"]) {
+  if (role === "owner") return "/owner/notifications";
+  if (role === "trainer") return "/trainer";
+  return "/portal/notifications";
 }
 
 export function DashboardTopbar({
@@ -59,7 +65,12 @@ export function DashboardTopbar({
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const unreadCount = notifications.filter((n) => !n.read).length;
-  const sections = role === "owner" ? ownerNavSections : [{ items: memberNavItems }];
+  const sections =
+    role === "owner"
+      ? ownerNavSections
+      : role === "trainer"
+        ? [{ items: trainerNavItems }]
+        : [{ items: memberNavItems }];
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
@@ -114,7 +125,7 @@ export function DashboardTopbar({
             </ScrollArea>
             <div className="border-t border-border p-2">
               <Button variant="ghost" size="sm" className="w-full" asChild>
-                <Link href={role === "owner" ? "/owner/notifications" : "/portal/notifications"}>
+                <Link href={notificationsHref(role)}>
                   View all notifications
                 </Link>
               </Button>
