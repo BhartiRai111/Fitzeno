@@ -56,6 +56,20 @@ export default function OwnerSettingsPage() {
     newLeadAlerts: true,
     lowAttendanceAlerts: false,
   });
+  const [memberChannels, setMemberChannels] = React.useState({
+    booking: true,
+    renewal: true,
+    payment: true,
+    attendance: true,
+    announcement: true,
+    promotion: true,
+  });
+  const [staffChannels, setStaffChannels] = React.useState({
+    booking: true,
+    class: true,
+    attendance: true,
+    announcement: true,
+  });
   const [paymentMethods, setPaymentMethods] = React.useState({
     card: true,
     upi: true,
@@ -240,11 +254,11 @@ export default function OwnerSettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="notifications">
+        <TabsContent value="notifications" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Notification settings</CardTitle>
-              <CardDescription>Choose which automated alerts stay active for your team.</CardDescription>
+              <CardTitle>Your alerts</CardTitle>
+              <CardDescription>Choose which automated alerts stay active for your own inbox.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-1">
               {(
@@ -266,6 +280,77 @@ export default function OwnerSettingsPage() {
                     <Switch
                       checked={notifPrefs[item.key]}
                       onCheckedChange={(checked) => setNotifPrefs((prev) => ({ ...prev, [item.key]: checked }))}
+                    />
+                  </div>
+                </React.Fragment>
+              ))}
+            </CardContent>
+            <CardFooter><SaveButton /></CardFooter>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Member communication controls</CardTitle>
+              <CardDescription>
+                Turn off a category to stop sending it to members platform-wide — members can only fine-tune categories you&apos;ve left on.
+                Members only ever see notifications about their own bookings, membership, and payments — never another member&apos;s information.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              {(
+                [
+                  { key: "booking" as const, label: "Booking & waitlist updates", description: "Confirmations, cancellations, and waitlist spots opening up." },
+                  { key: "renewal" as const, label: "Renewal reminders", description: "Upcoming membership expiry and renewal charges." },
+                  { key: "payment" as const, label: "Payment receipts & failures", description: "Receipts, failed payments, and refund confirmations." },
+                  { key: "attendance" as const, label: "Attendance & streaks", description: "Check-in streaks and progress milestones." },
+                  { key: "announcement" as const, label: "Gym announcements", description: "Closures, schedule changes, and general updates." },
+                  { key: "promotion" as const, label: "Offers & promotions", description: "Referral bonuses and seasonal offers." },
+                ]
+              ).map((item, i) => (
+                <React.Fragment key={item.key}>
+                  {i > 0 && <Separator />}
+                  <div className="flex items-center justify-between py-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{item.label}</p>
+                      <p className="text-sm text-muted-foreground">{item.description}</p>
+                    </div>
+                    <Switch
+                      checked={memberChannels[item.key]}
+                      onCheckedChange={(checked) => setMemberChannels((prev) => ({ ...prev, [item.key]: checked }))}
+                    />
+                  </div>
+                </React.Fragment>
+              ))}
+            </CardContent>
+            <CardFooter><SaveButton /></CardFooter>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Trainer & staff communication controls</CardTitle>
+              <CardDescription>
+                Choose which categories reach trainers and front desk staff. Each trainer only ever sees updates about their own classes and assigned members.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              {(
+                [
+                  { key: "booking" as const, label: "New PT bookings & cancellations", description: "Session bookings and cancellations for their own clients." },
+                  { key: "class" as const, label: "Class capacity & schedule alerts", description: "Classes nearing capacity, cancellations, and roster changes." },
+                  { key: "attendance" as const, label: "Attendance marking reminders", description: "Nudges to mark attendance for classes still open." },
+                  { key: "announcement" as const, label: "Gym-wide announcements", description: "Closures, policy updates, and general communication." },
+                ]
+              ).map((item, i) => (
+                <React.Fragment key={item.key}>
+                  {i > 0 && <Separator />}
+                  <div className="flex items-center justify-between py-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{item.label}</p>
+                      <p className="text-sm text-muted-foreground">{item.description}</p>
+                    </div>
+                    <Switch
+                      checked={staffChannels[item.key]}
+                      onCheckedChange={(checked) => setStaffChannels((prev) => ({ ...prev, [item.key]: checked }))}
                     />
                   </div>
                 </React.Fragment>

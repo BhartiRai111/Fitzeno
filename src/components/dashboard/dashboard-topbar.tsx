@@ -32,6 +32,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Logo } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
 import { ownerNavSections, memberNavItems, trainerNavItems } from "@/components/dashboard/nav-config";
+import { CATEGORY_META } from "@/lib/notification-meta";
 import type { NotificationItem } from "@/lib/data/types";
 
 interface DashboardTopbarProps {
@@ -50,7 +51,7 @@ function isActive(pathname: string, href: string) {
 
 function notificationsHref(role: DashboardTopbarProps["role"]) {
   if (role === "owner") return "/owner/notifications";
-  if (role === "trainer") return "/trainer";
+  if (role === "trainer") return "/trainer/notifications";
   return "/portal/notifications";
 }
 
@@ -108,19 +109,42 @@ export function DashboardTopbar({
             <div className="h-px bg-border" />
             <ScrollArea className="max-h-80">
               <div className="divide-y divide-border">
-                {notifications.map((n) => (
-                  <div
-                    key={n.id}
-                    className={cn("px-4 py-3 transition-colors hover:bg-muted/50", !n.read && "bg-accent/40")}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium text-foreground">{n.title}</p>
-                      {!n.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
-                    </div>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{n.description}</p>
-                    <p className="mt-1 text-xs text-muted-foreground/70">{n.timestamp}</p>
-                  </div>
-                ))}
+                {notifications.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-muted-foreground">You&apos;re all caught up.</p>
+                ) : (
+                  notifications.slice(0, 6).map((n) => {
+                    const meta = CATEGORY_META[n.type];
+                    const Icon = meta.icon;
+                    const rowContent = (
+                      <>
+                        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", meta.className)}>
+                          <Icon className="size-3.5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-sm font-medium text-foreground">{n.title}</p>
+                            {!n.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
+                          </div>
+                          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{n.description}</p>
+                          <p className="mt-1 text-xs text-muted-foreground/70">{n.timestamp}</p>
+                        </div>
+                      </>
+                    );
+                    const rowClassName = cn(
+                      "flex items-start gap-2.5 px-4 py-3 transition-colors hover:bg-muted/50",
+                      !n.read && "bg-accent/40"
+                    );
+                    return n.href ? (
+                      <Link key={n.id} href={n.href} className={rowClassName}>
+                        {rowContent}
+                      </Link>
+                    ) : (
+                      <div key={n.id} className={rowClassName}>
+                        {rowContent}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </ScrollArea>
             <div className="border-t border-border p-2">

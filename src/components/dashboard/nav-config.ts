@@ -81,4 +81,5 @@ export const trainerNavItems: NavItem[] = [
   { label: "My Schedule", href: "/trainer/schedule", icon: CalendarDays },
   { label: "Attendance", href: "/trainer/attendance", icon: ClipboardCheck },
   { label: "Availability", href: "/trainer/availability", icon: CalendarClock },
+  { label: "Notifications", href: "/trainer/notifications", icon: Bell },
 ];

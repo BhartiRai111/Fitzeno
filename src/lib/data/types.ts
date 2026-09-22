@@ -121,13 +121,42 @@ export interface Payment {
   invoiceId: string;
 }
 
+export type NotificationCategory =
+  | "booking"
+  | "waitlist"
+  | "class"
+  | "renewal"
+  | "payment"
+  | "attendance"
+  | "lead"
+  | "staff"
+  | "announcement"
+  | "promotion"
+  | "system";
+
+export type NotificationPriority = "high" | "medium" | "low";
+
 export interface NotificationItem {
   id: string;
-  type: "payment" | "booking" | "alert" | "renewal" | "lead" | "system";
+  type: NotificationCategory;
   title: string;
   description: string;
   timestamp: string;
   read: boolean;
+  priority: NotificationPriority;
+  /** Deep link into the related feature — omitted for purely informational items. */
+  href?: string;
+}
+
+export interface SentAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  audienceLabel: string;
+  recipientCount: number;
+  priority: NotificationPriority;
+  sentBy: string;
+  sentOn: string;
 }
 
 export interface BookingItem {

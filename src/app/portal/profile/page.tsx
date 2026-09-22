@@ -14,8 +14,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 export default function PortalProfilePage() {
   const [saving, setSaving] = React.useState(false);
   const [prefs, setPrefs] = React.useState({
-    classReminders: true,
+    bookings: true,
     renewalReminders: true,
+    payments: true,
+    attendance: true,
+    announcements: true,
     promotions: false,
   });
 
@@ -77,13 +80,16 @@ export default function PortalProfilePage() {
       <Card>
         <CardHeader>
           <CardTitle>Notification preferences</CardTitle>
-          <CardDescription>Choose what you want to be notified about.</CardDescription>
+          <CardDescription>Choose what you want to be notified about. Your gym may keep some categories on by default.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-1">
           {(
             [
-              { key: "classReminders" as const, label: "Class booking reminders", description: "Get notified before your booked classes start." },
+              { key: "bookings" as const, label: "Bookings & waitlist", description: "Confirmations, cancellations, and waitlist spots opening up." },
               { key: "renewalReminders" as const, label: "Renewal reminders", description: "Get notified before your membership renews or expires." },
+              { key: "payments" as const, label: "Payment receipts & failures", description: "Receipts, failed payments, and refund confirmations." },
+              { key: "attendance" as const, label: "Attendance & streaks", description: "Check-in streaks and progress milestones." },
+              { key: "announcements" as const, label: "Gym announcements", description: "Closures, schedule changes, and general updates from Fitzeno." },
               { key: "promotions" as const, label: "Offers & promotions", description: "Get notified about discounts and referral offers." },
             ]
           ).map((item, i) => (
