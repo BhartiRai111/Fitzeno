@@ -38,7 +38,7 @@ export const ownerNavSections: NavSection[] = [
     items: [
       { label: "Members", href: "/owner/members", icon: Users },
       { label: "Leads", href: "/owner/leads", icon: UserPlus },
-      { label: "Trainers & Staff", href: "/owner/staff", icon: UserCircle },
+      { label: "Team & Access", href: "/owner/staff", icon: UserCircle },
     ],
   },
   {

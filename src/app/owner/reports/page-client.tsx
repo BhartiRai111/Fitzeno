@@ -413,7 +413,7 @@ export function ReportsPageClient() {
           </Card>
           <Button variant="ghost" size="sm" asChild className="no-print">
             <Link href="/owner/staff">
-              View trainers &amp; staff
+              View team
               <ArrowRight className="size-4" />
             </Link>
           </Button>

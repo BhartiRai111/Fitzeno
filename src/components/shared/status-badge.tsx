@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { MembershipStatus, LeadStatus, PaymentStatus, BookingStatus } from "@/lib/data/types";
+import type { MembershipStatus, LeadStatus, PaymentStatus, BookingStatus, StaffStatus } from "@/lib/data/types";
 
 const membershipConfig: Record<MembershipStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
   active: { label: "Active", variant: "success" },
@@ -60,4 +60,19 @@ export function PaymentStatusBadge({ status }: { status: PaymentStatus }) {
 export function BookingStatusBadge({ status }: { status: BookingStatus }) {
   const config = bookingConfig[status];
   return <Badge variant={config.variant}>{config.label}</Badge>;
+}
+
+const staffConfig: Record<StaffStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  active: { label: "Active", variant: "success" },
+  invited: { label: "Invited", variant: "info" },
+  inactive: { label: "Inactive", variant: "default" },
+};
+
+export function StaffStatusBadge({ status }: { status: StaffStatus }) {
+  const config = staffConfig[status];
+  return (
+    <Badge variant={config.variant} dot>
+      {config.label}
+    </Badge>
+  );
 }

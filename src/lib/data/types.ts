@@ -15,7 +15,28 @@ export interface Trainer {
   reviewCount: number;
   yearsExperience: number;
   color: "indigo" | "lime" | "amber" | "sky";
+  email?: string;
+  phone?: string;
+  joinedOn?: string;
+  status?: StaffStatus;
+  permissionOverrides?: Partial<Record<PermissionArea, PermissionLevel>>;
 }
+
+export type StaffAccessRole = "owner" | "manager" | "trainer" | "front-desk";
+export type StaffStatus = "active" | "invited" | "inactive";
+
+export type PermissionArea =
+  | "members"
+  | "bookings"
+  | "attendance"
+  | "memberships"
+  | "payments"
+  | "reports"
+  | "staff"
+  | "announcements"
+  | "settings";
+
+export type PermissionLevel = "none" | "view" | "manage";
 
 export interface MembershipPlan {
   id: string;
@@ -172,12 +193,15 @@ export interface StaffMember {
   id: string;
   name: string;
   initials: string;
-  role: "Manager" | "Front Desk" | "Front Desk / Sales";
+  /** Display job title, e.g. "Front Desk / Sales" — distinct from the access role that drives permissions. */
+  title: string;
+  accessRole: StaffAccessRole;
   email: string;
   phone: string;
-  status: "active" | "invited" | "inactive";
+  status: StaffStatus;
   joinedOn: string;
-  permissions: string[];
+  permissionOverrides: Partial<Record<PermissionArea, PermissionLevel>>;
+  recentActivity: string[];
 }
 
 export interface PtSession {

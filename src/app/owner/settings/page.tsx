@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
-import { Building2, Moon, Sun, Monitor } from "lucide-react";
+import { Building2, Moon, Sun, Monitor, ArrowRight } from "lucide-react";
 import { useTheme } from "next-themes";
 import { PageHeader } from "@/components/shared/page-header";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, CardAction } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +25,10 @@ import {
 import { LogoMark } from "@/components/brand/logo-mark";
 import { gymProfile } from "@/lib/data/gym";
 import { staffMembers } from "@/lib/data/staff";
+import { trainers } from "@/lib/data/trainers";
+import { ROLE_LABELS, ROLE_DESCRIPTIONS, ROLE_BADGE_VARIANT } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
+import type { StaffAccessRole } from "@/lib/data/types";
 
 function SaveButton({ label = "Save Changes" }: { label?: string }) {
   const [saving, setSaving] = React.useState(false);
@@ -393,26 +397,34 @@ export default function OwnerSettingsPage() {
 
         <TabsContent value="staff">
           <Card>
-            <CardHeader>
-              <CardTitle>Staff & permissions</CardTitle>
-              <CardDescription>What each role can see and do. Manage people from Trainers & Staff.</CardDescription>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Staff &amp; permissions</CardTitle>
+                <CardDescription>What each role can see and do across Fitzeno.</CardDescription>
+              </div>
+              <CardAction>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/owner/staff?tab=roles">
+                    Manage team &amp; access
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
             </CardHeader>
             <CardContent className="space-y-3">
-              {["Manager", "Front Desk", "Front Desk / Sales"].map((role) => {
-                const count = staffMembers.filter((s) => s.role === role).length;
-                const perms = staffMembers.find((s) => s.role === role)?.permissions ?? [];
+              {(Object.keys(ROLE_LABELS) as StaffAccessRole[]).map((role) => {
+                const count =
+                  role === "trainer"
+                    ? trainers.length
+                    : staffMembers.filter((s) => s.accessRole === role).length;
                 return (
                   <div key={role} className="flex flex-col gap-2 rounded-md border border-border p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-2">
                       <Building2 className="size-4 text-muted-foreground" />
-                      <span className="text-sm font-medium text-foreground">{role}</span>
-                      <Badge variant="outline">{count} {count === 1 ? "person" : "people"}</Badge>
+                      <Badge variant={ROLE_BADGE_VARIANT[role]}>{ROLE_LABELS[role]}</Badge>
+                      <span className="text-sm font-medium text-foreground">{count} {count === 1 ? "person" : "people"}</span>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {perms.map((p) => (
-                        <Badge key={p} variant="default">{p}</Badge>
-                      ))}
-                    </div>
+                    <p className="text-sm text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
                   </div>
                 );
               })}

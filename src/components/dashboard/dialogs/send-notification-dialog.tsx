@@ -49,7 +49,7 @@ const audienceOptions = [
   { value: "growth", label: "Growth plan members", count: estimateMembers(members.filter((m) => m.plan === "Growth").length) },
   { value: "elite", label: "Elite plan members", count: estimateMembers(members.filter((m) => m.plan === "Elite").length) },
   { value: "trainers", label: "All trainers", count: trainers.length },
-  { value: "staff", label: "Front desk staff", count: staffMembers.filter((s) => s.role.includes("Front Desk")).length },
+  { value: "staff", label: "Front desk staff", count: staffMembers.filter((s) => s.accessRole === "front-desk").length },
   { value: "trainers-staff", label: "All trainers & staff", count: trainers.length + staffMembers.length },
 ] as const;
 
