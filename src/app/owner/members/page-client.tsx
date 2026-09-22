@@ -17,11 +17,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { toast } from "sonner";
 import { MembershipStatusBadge, PaymentStatusBadge } from "@/components/shared/status-badge";
 import { MemberActionsMenu } from "@/components/dashboard/member-actions-menu";
-import { AddMemberDialog } from "@/components/dashboard/dialogs/add-member-dialog";
-import { members } from "@/lib/data/members";
+import { AddMemberDialog, type NewMemberInput } from "@/components/dashboard/dialogs/add-member-dialog";
+import { members as initialMembers } from "@/lib/data/members";
 import { trainers } from "@/lib/data/trainers";
+import { membershipPlans } from "@/lib/data/plans";
+import { addMonths } from "@/lib/membership-helpers";
 import { formatDate, daysBetween } from "@/lib/utils-data";
 import type { Member } from "@/lib/data/types";
 
@@ -33,16 +36,55 @@ function isInactive(member: Member) {
   return daysBetween(member.lastCheckIn, TODAY) >= 21;
 }
 
+function initialsFor(name: string): string {
+  return name.split(" ").map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "?";
+}
+
 export function MembersPageClient() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get("tab") as TabValue) ?? "all";
   const initialPlan = searchParams.get("plan") ?? "all";
+  const prefillName = searchParams.get("prefillName");
+  const prefillEmail = searchParams.get("prefillEmail") ?? "";
+  const prefillPhone = searchParams.get("prefillPhone") ?? "";
+  const prefillPlan = searchParams.get("prefillPlan") ?? "";
 
+  const [members, setMembers] = React.useState<Member[]>(initialMembers);
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [planFilter, setPlanFilter] = React.useState(initialPlan);
   const [trainerFilter, setTrainerFilter] = React.useState("all");
   const [joinedFilter, setJoinedFilter] = React.useState("all");
+  const [addMemberOpen, setAddMemberOpen] = React.useState(!!prefillName);
+
+  function handleAddMember(input: NewMemberInput) {
+    const plan = membershipPlans.find((p) => p.id === input.planId) ?? membershipPlans[0];
+    const newMember: Member = {
+      id: `m-${Date.now()}`,
+      name: input.name,
+      initials: initialsFor(input.name),
+      email: input.email,
+      phone: input.phone,
+      plan: plan.name,
+      status: "active",
+      joinedOn: TODAY,
+      expiresOn: addMonths(TODAY, plan.billingPeriod === "year" ? 12 : 1),
+      lastCheckIn: TODAY,
+      lifetimeValue: plan.price,
+      trainerId: input.trainerId,
+      paymentStatus: "paid",
+      attendanceThisMonth: 0,
+      gender: "Other",
+      dob: input.dob,
+      address: "",
+      emergencyContact: "",
+      notes: prefillName
+        ? [{ id: `note-${Date.now()}`, author: "Sam Carter", date: TODAY, text: "Converted from an enquiry — see the Leads pipeline for their contact history." }]
+        : [],
+    };
+    setMembers((prev) => [newMember, ...prev]);
+    toast.success(`${newMember.name} is now a member`, { description: `${plan.name} plan · joined ${formatDate(TODAY)}.` });
+  }
 
   const tabFiltered = members.filter((m) => {
     if (tab === "active") return m.status === "active";
@@ -82,7 +124,24 @@ export function MembersPageClient() {
       <PageHeader
         title="Members"
         description={`${members.length} total members`}
-        actions={<AddMemberDialog />}
+        actions={
+          <AddMemberDialog
+            open={addMemberOpen}
+            onOpenChange={setAddMemberOpen}
+            onAdd={handleAddMember}
+            defaultValues={
+              prefillName
+                ? {
+                    name: prefillName,
+                    email: prefillEmail,
+                    phone: prefillPhone,
+                    planId: prefillPlan || undefined,
+                    note: `${prefillName} converted from a lead — confirm their details and finish setup.`,
+                  }
+                : undefined
+            }
+          />
+        }
       />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>

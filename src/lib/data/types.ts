@@ -1,5 +1,6 @@
 export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial" | "cancelled";
-export type LeadStatus = "new" | "contacted" | "trial-booked" | "trial-attended" | "converted" | "lost";
+export type LeadStatus = "new" | "contacted" | "follow-up" | "trial-booked" | "trial-attended" | "converted" | "lost";
+export type LeadLostReason = "No response" | "Not interested" | "Price" | "Chose another gym" | "Bad timing" | "Other";
 export type PaymentStatus = "paid" | "pending" | "failed" | "refunded";
 export type BookingStatus = "booked" | "waitlisted" | "attended" | "cancelled" | "no-show";
 export type LeadSource = "Website" | "Instagram" | "Referral" | "Walk-in" | "Advertisement";
@@ -125,6 +126,13 @@ export interface Lead {
   nextFollowUp: string | null;
   assignedTo: string;
   notes: { id: string; author: string; date: string; text: string }[];
+  lostReason?: LeadLostReason;
+  /** The class this lead's free trial is booked into. */
+  trialClassId?: string;
+  /** Computed next-occurrence date for the trial class, e.g. "2026-09-26". */
+  trialDate?: string;
+  convertedPlanId?: string;
+  convertedOn?: string;
 }
 
 export type RevenueCategory = "Membership" | "Personal Training" | "Classes" | "Retail" | "Other";

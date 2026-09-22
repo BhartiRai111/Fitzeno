@@ -4,6 +4,7 @@ import type { NotificationItem, BookingItem, SentAnnouncement } from "./types";
 // attendance trends, class capacity, and staff/trainer updates.
 export const ownerNotifications: NotificationItem[] = [
   { id: "on-1", type: "lead", title: "New lead captured", description: "Naomi Clarke submitted an enquiry via Instagram.", timestamp: "10 min ago", read: false, priority: "medium", href: "/owner/leads?tab=new" },
+  { id: "on-1b", type: "lead", title: "Follow-up overdue", description: "Ben Foster's follow-up was due yesterday — he was offered a trial slot but hasn't booked yet.", timestamp: "This morning", read: false, priority: "high", href: "/owner/leads?tab=followups" },
   { id: "on-2", type: "payment", title: "Payment received", description: "Isabelle Moreau paid £119 for the Elite plan.", timestamp: "2 hours ago", read: false, priority: "low", href: "/owner/payments?tab=transactions" },
   { id: "on-3", type: "class", title: "Class nearly full", description: "Sunrise Spin (Thu 06:00) is at capacity — 20/20 booked.", timestamp: "5 hours ago", read: true, priority: "medium", href: "/owner/classes?tab=classes" },
   { id: "on-4", type: "renewal", title: "Memberships expiring soon", description: "3 memberships expire within the next 7 days.", timestamp: "Yesterday", read: false, priority: "high", href: "/owner/memberships?tab=expiring" },

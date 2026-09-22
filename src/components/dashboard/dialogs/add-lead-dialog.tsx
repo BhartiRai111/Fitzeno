@@ -22,30 +22,52 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LEAD_SOURCES } from "@/lib/lead-helpers";
+import { staffMembers } from "@/lib/data/staff";
 import type { LeadSource } from "@/lib/data/types";
 
-const sources: LeadSource[] = ["Website", "Instagram", "Referral", "Walk-in", "Advertisement"];
+const DEFAULT_ASSIGNEES = ["Front Desk", ...staffMembers.map((s) => s.name)];
+
+export interface NewLeadInput {
+  name: string;
+  phone: string;
+  email: string;
+  source: LeadSource;
+  interest: string;
+  assignedTo: string;
+}
 
 interface AddLeadDialogProps {
   trigger?: React.ReactNode;
+  assigneeOptions?: string[];
+  onAdd?: (input: NewLeadInput) => void;
 }
 
-export function AddLeadDialog({ trigger }: AddLeadDialogProps) {
+export function AddLeadDialog({ trigger, assigneeOptions = DEFAULT_ASSIGNEES, onAdd }: AddLeadDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [source, setSource] = React.useState<LeadSource>("Website");
+  const [assignedTo, setAssignedTo] = React.useState(assigneeOptions[0] ?? "Front Desk");
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") ?? "");
+    const name = String(form.get("name") ?? "").trim();
+    const phone = String(form.get("phone") ?? "").trim();
+    const email = String(form.get("email") ?? "").trim();
+    const interest = String(form.get("interest") ?? "").trim();
+
     setSubmitting(true);
     setTimeout(() => {
       setSubmitting(false);
       setOpen(false);
+      onAdd?.({ name, phone, email, source, interest: interest || "General enquiry", assignedTo });
       toast.success("Lead added", {
         description: `${name || "New lead"} has been added to your pipeline.`,
       });
       (event.target as HTMLFormElement).reset();
+      setSource("Website");
+      setAssignedTo(assigneeOptions[0] ?? "Front Desk");
     }, 700);
   }
 
@@ -82,14 +104,14 @@ export function AddLeadDialog({ trigger }: AddLeadDialogProps) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Source</Label>
-              <Select defaultValue="Website">
+              <Select value={source} onValueChange={(v) => setSource(v as LeadSource)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {sources.map((source) => (
-                    <SelectItem key={source} value={source}>
-                      {source}
+                  {LEAD_SOURCES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -99,6 +121,19 @@ export function AddLeadDialog({ trigger }: AddLeadDialogProps) {
               <Label htmlFor="add-lead-interest">Interested in</Label>
               <Input id="add-lead-interest" name="interest" placeholder="Growth plan" />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Assign to</Label>
+            <Select value={assignedTo} onValueChange={setAssignedTo}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {assigneeOptions.map((a) => (
+                  <SelectItem key={a} value={a}>{a}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

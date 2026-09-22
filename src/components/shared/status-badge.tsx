@@ -13,8 +13,9 @@ const membershipConfig: Record<MembershipStatus, { label: string; variant: "succ
 const leadConfig: Record<LeadStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
   new: { label: "New", variant: "info" },
   contacted: { label: "Contacted", variant: "default" },
-  "trial-booked": { label: "Trial Booked", variant: "warning" },
-  "trial-attended": { label: "Trial Attended", variant: "warning" },
+  "follow-up": { label: "Follow-up", variant: "warning" },
+  "trial-booked": { label: "Trial Booked", variant: "success" },
+  "trial-attended": { label: "Trial Attended", variant: "info" },
   converted: { label: "Converted", variant: "success" },
   lost: { label: "Lost", variant: "danger" },
 };
