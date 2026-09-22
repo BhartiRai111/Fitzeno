@@ -257,3 +257,37 @@
       radial-gradient(50% 50% at 5% 0%, rgb(182 245 0 / 0.1) 0%, transparent 55%);
   }
 }
+
+/* ==========================================================================
+   Print — used by the Reports "Print" action. Screen-only chrome (nav,
+   filters, action buttons) is hidden; report metadata that's otherwise
+   invisible on screen is revealed.
+   ========================================================================== */
+.print-only {
+  display: none;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+  }
+  a[href]::after {
+    content: none !important;
+  }
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+}

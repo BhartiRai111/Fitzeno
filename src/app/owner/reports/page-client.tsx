@@ -18,6 +18,7 @@ import { MemberGrowthChart } from "@/components/dashboard/charts/member-growth-c
 import { WeeklyAttendanceChart } from "@/components/dashboard/charts/weekly-attendance-chart";
 import { PeakHoursChart } from "@/components/dashboard/charts/peak-hours-chart";
 import { ReportsOverviewTab } from "@/components/dashboard/reports/overview-tab";
+import { ReportActions, PrintReportHeader } from "@/components/dashboard/reports/report-actions";
 import { Wallet, Users, UserMinus, TrendingUp } from "lucide-react";
 
 import { members } from "@/lib/data/members";
@@ -26,8 +27,10 @@ import { memberGrowth, retentionByCohort, churnReasons, classPerformance, traine
 import { trainers } from "@/lib/data/trainers";
 import { gymClasses } from "@/lib/data/classes";
 import { classBookings } from "@/lib/data/class-bookings";
+import { weeklyAttendance, peakHours } from "@/lib/data/attendance";
 import { formatCurrency } from "@/lib/utils-data";
 import { percentTrend, getClassUtilization, LOW_UTILIZATION_THRESHOLD, HIGH_UTILIZATION_THRESHOLD } from "@/lib/reports-helpers";
+import type { CsvSection } from "@/lib/export-helpers";
 
 type TabValue = "overview" | "revenue" | "members" | "attendance" | "classes" | "trainers" | "retention";
 
@@ -54,12 +57,112 @@ export function ReportsPageClient() {
   const cancelledOrNoShow = classBookings.filter((b) => b.status === "cancelled" || b.status === "no-show").length;
   const cancellationRate = totalBookingAttempts > 0 ? Math.round((cancelledOrNoShow / totalBookingAttempts) * 100) : 0;
 
+  const sixMonthScope = `Last 6 months (${revenueByMonth[0].month}–${revenueByMonth[revenueByMonth.length - 1].month} 2026)`;
+
+  const revenueSections: CsvSection[] = [
+    {
+      title: "Summary",
+      headers: ["Metric", "Value"],
+      rows: [
+        ["Monthly Revenue", formatCurrency(monthlyRevenue)],
+        ["Avg Revenue / Member", formatCurrency(Math.round(monthlyRevenue / activeMembers))],
+        ["Top Plan", `${revenueByPlan[0].plan} (${revenueByPlan[0].value}% of revenue)`],
+      ],
+    },
+    { title: "Revenue trend", headers: ["Month", "Revenue (£)"], rows: revenueByMonth.map((m) => [m.month, m.revenue]) },
+    { title: "Revenue by category", headers: ["Category", "Amount (£)", "Share %"], rows: revenueByCategory.map((c) => [c.category, c.amount, c.share]) },
+    { title: "Revenue by plan", headers: ["Plan", "Amount (£)", "Share %"], rows: revenueByPlan.map((p) => [p.plan, p.amount, p.value]) },
+  ];
+
+  const membershipStatusCounts = [
+    { status: "Active", count: members.filter((m) => m.status === "active").length },
+    { status: "Expiring", count: members.filter((m) => m.status === "expiring").length },
+    { status: "Expired", count: members.filter((m) => m.status === "expired").length },
+    { status: "Frozen", count: members.filter((m) => m.status === "frozen").length },
+    { status: "Cancelled", count: members.filter((m) => m.status === "cancelled").length },
+  ];
+  const membersSections: CsvSection[] = [
+    {
+      title: "Summary",
+      headers: ["Metric", "Value"],
+      rows: [
+        ["Active Members", activeMembers],
+        ["New This Month", thisMonthGrowth.newMembers],
+        ["Churned This Month", thisMonthGrowth.churned],
+      ],
+    },
+    { title: "Member growth trend", headers: ["Month", "New Members", "Churned"], rows: memberGrowth.map((m) => [m.month, m.newMembers, m.churned]) },
+    { title: "Membership status breakdown", headers: ["Status", "Count"], rows: membershipStatusCounts.map((s) => [s.status, s.count]) },
+  ];
+
+  const attendanceSections: CsvSection[] = [
+    { title: "Weekly attendance pattern", headers: ["Day", "Visits"], rows: weeklyAttendance.map((d) => [d.day, d.visits]) },
+    { title: "Peak hours", headers: ["Hour", "Visits"], rows: peakHours.map((h) => [h.hour, h.visits]) },
+  ];
+
+  const classesSections: CsvSection[] = [
+    {
+      title: "Summary",
+      headers: ["Metric", "Value"],
+      rows: [
+        [`Classes running under ${LOW_UTILIZATION_THRESHOLD}% capacity`, lowUtilClasses.length],
+        [`Classes at or near ${HIGH_UTILIZATION_THRESHOLD}%+ capacity`, highUtilClasses.length],
+        ["Cancellation / no-show rate", `${cancellationRate}%`],
+      ],
+    },
+    {
+      title: "Class performance",
+      headers: ["Class", "Type", "Rating", "Sessions this month", "Avg attendance %"],
+      rows: classPerformance.map((c) => [c.className, c.type, c.rating, c.sessionsThisMonth, c.avgAttendance]),
+    },
+    {
+      title: "Live schedule utilization",
+      headers: ["Class", "Day", "Time", "Trainer", "Booked", "Capacity", "Utilization %"],
+      rows: utilization.map((u) => [
+        u.gymClass.name,
+        u.gymClass.day,
+        u.gymClass.startTime,
+        trainers.find((t) => t.id === u.gymClass.trainerId)?.name ?? "Unassigned",
+        u.gymClass.booked,
+        u.gymClass.capacity,
+        u.utilization,
+      ]),
+    },
+  ];
+
+  const trainersSections: CsvSection[] = [
+    {
+      title: "Trainer performance",
+      headers: ["Trainer", "Sessions/mo", "Rating", "Utilization %", "Revenue (£)"],
+      rows: trainerPerformance.map((p) => [
+        trainers.find((t) => t.id === p.trainerId)?.name ?? p.trainerId,
+        p.sessionsRun,
+        p.avgRating,
+        p.utilization,
+        p.revenue,
+      ]),
+    },
+  ];
+
+  const retentionSections: CsvSection[] = [
+    {
+      title: "Summary",
+      headers: ["Metric", "Value"],
+      rows: [
+        ["3-Month Retention", `${avgRetention}%`],
+        ["Members Churned", totalChurned],
+      ],
+    },
+    { title: "Retention by signup cohort", headers: ["Cohort", "Month 1 %", "Month 2 %", "Month 3 %"], rows: retentionByCohort.map((c) => [c.cohort, c.month1, c.month2, c.month3]) },
+    { title: "Why members leave", headers: ["Reason", "Count"], rows: churnReasons.map((r) => [r.reason, r.count]) },
+  ];
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Reports & Analytics" description="Data behind every decision — nothing here for decoration" />
+      <PageHeader className="no-print" title="Reports & Analytics" description="Data behind every decision — nothing here for decoration" />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
-        <TabsList>
+        <TabsList className="no-print">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="revenue">Revenue</TabsTrigger>
           <TabsTrigger value="members">Members</TabsTrigger>
@@ -74,6 +177,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="revenue" className="space-y-4">
+          <PrintReportHeader reportLabel="Revenue Report" scopeLabel={sixMonthScope} />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Revenue Report" scopeLabel={sixMonthScope} sections={revenueSections} />
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard
               label="Monthly Revenue"
@@ -92,7 +199,7 @@ export function ReportsPageClient() {
                 <CardDescription>Last 6 months — answers: is revenue growing?</CardDescription>
               </div>
               <CardAction>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="ghost" size="sm" asChild className="no-print">
                   <Link href="/owner/payments?tab=transactions">
                     View transactions
                     <ArrowRight className="size-4" />
@@ -129,6 +236,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="members" className="space-y-4">
+          <PrintReportHeader reportLabel="Members Report" scopeLabel={sixMonthScope} />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Members Report" scopeLabel={sixMonthScope} sections={membersSections} />
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard label="Active Members" value={activeMembers.toString()} icon={Users} />
             <StatCard
@@ -154,7 +265,7 @@ export function ReportsPageClient() {
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle>Membership status breakdown</CardTitle>
               <CardAction>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="ghost" size="sm" asChild className="no-print">
                   <Link href="/owner/members">
                     View members
                     <ArrowRight className="size-4" />
@@ -177,6 +288,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="attendance" className="space-y-4">
+          <PrintReportHeader reportLabel="Attendance Report" scopeLabel="Weekly pattern & peak hours (rolling average)" />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Attendance Report" scopeLabel="Weekly pattern & peak hours (rolling average)" sections={attendanceSections} />
+          </div>
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <div>
@@ -184,7 +299,7 @@ export function ReportsPageClient() {
                 <CardDescription>Answers: which days need more staff on the floor?</CardDescription>
               </div>
               <CardAction>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="ghost" size="sm" asChild className="no-print">
                   <Link href="/owner/attendance?tab=history">
                     View log
                     <ArrowRight className="size-4" />
@@ -201,6 +316,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="classes" className="space-y-4">
+          <PrintReportHeader reportLabel="Classes Report" scopeLabel="Current schedule snapshot" />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Classes Report" scopeLabel="Current schedule snapshot" sections={classesSections} />
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard label="Classes Running Low" value={lowUtilClasses.length.toString()} icon={AlertTriangle} helpText={`under ${LOW_UTILIZATION_THRESHOLD}% capacity`} />
             <StatCard label="Classes Near Capacity" value={highUtilClasses.length.toString()} icon={Users} helpText={`${HIGH_UTILIZATION_THRESHOLD}%+ capacity`} />
@@ -213,7 +332,7 @@ export function ReportsPageClient() {
                 <CardDescription>Answers: which classes are worth keeping — and which aren&apos;t?</CardDescription>
               </div>
               <CardAction>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="ghost" size="sm" asChild className="no-print">
                   <Link href="/owner/classes?tab=classes">
                     View schedule
                     <ArrowRight className="size-4" />
@@ -245,6 +364,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="trainers" className="space-y-4">
+          <PrintReportHeader reportLabel="Trainer Performance Report" scopeLabel="This month" />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Trainer Performance Report" scopeLabel="This month" sections={trainersSections} />
+          </div>
           <Card className="overflow-hidden p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -288,7 +411,7 @@ export function ReportsPageClient() {
               </table>
             </div>
           </Card>
-          <Button variant="ghost" size="sm" asChild>
+          <Button variant="ghost" size="sm" asChild className="no-print">
             <Link href="/owner/staff">
               View trainers &amp; staff
               <ArrowRight className="size-4" />
@@ -297,6 +420,10 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="retention" className="space-y-4">
+          <PrintReportHeader reportLabel="Retention Report" scopeLabel={sixMonthScope} />
+          <div className="flex justify-end">
+            <ReportActions reportLabel="Retention Report" scopeLabel={sixMonthScope} sections={retentionSections} />
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <StatCard label="3-Month Retention" value={`${avgRetention}%`} icon={Users} helpText="average across cohorts" />
             <StatCard label="Members Churned" value={totalChurned.toString()} icon={UserMinus} helpText="last 6 months" />
@@ -333,7 +460,7 @@ export function ReportsPageClient() {
                 <CardDescription>Answers: what should we fix to reduce churn?</CardDescription>
               </div>
               <CardAction>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="ghost" size="sm" asChild className="no-print">
                   <Link href="/owner/members?tab=expired">
                     View expired members
                     <ArrowRight className="size-4" />

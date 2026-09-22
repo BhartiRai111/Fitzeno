@@ -22,6 +22,7 @@ import { PeriodFilter } from "@/components/dashboard/period-filter";
 import { RevenueChart } from "@/components/dashboard/charts/revenue-chart";
 import { TrendBarChart } from "@/components/dashboard/charts/trend-bar-chart";
 import { NeedsAttention } from "@/components/dashboard/needs-attention";
+import { ReportActions, PrintReportHeader } from "@/components/dashboard/reports/report-actions";
 
 import { members } from "@/lib/data/members";
 import { payments } from "@/lib/data/payments";
@@ -34,6 +35,7 @@ import {
   buildPeriod,
   percentTrend,
   isBeyondDataCoverage,
+  formatRangeLabel,
   getRevenueInRange,
   getDailyRevenueInRange,
   getRenewalsInRange,
@@ -50,8 +52,13 @@ import {
   LOW_UTILIZATION_THRESHOLD,
   HIGH_UTILIZATION_THRESHOLD,
 } from "@/lib/reports-helpers";
-import type { PeriodPreset, DateRange } from "@/lib/reports-helpers";
+import type { PeriodPreset, DateRange, Trend } from "@/lib/reports-helpers";
+import type { CsvSection } from "@/lib/export-helpers";
 import type { AlertItem } from "@/lib/data/types";
+
+function trendText(t?: Trend): string {
+  return t ? t.value : "—";
+}
 
 const LEAD_SOURCES = ["Website", "Instagram", "Referral", "Walk-in", "Advertisement"] as const;
 
@@ -139,6 +146,36 @@ export function ReportsOverviewTab() {
   ];
   const insights = rawInsights.filter((a) => !a.message.startsWith("0"));
 
+  const scopeLabel = `${period.label} · ${formatRangeLabel(range)}`;
+  const csvSections: CsvSection[] = outOfCoverage
+    ? []
+    : [
+        {
+          title: "Key metrics",
+          headers: ["Metric", "This period", "Previous period", "Change"],
+          rows: [
+            ["Revenue", formatCurrency(revenue), formatCurrency(prevRevenue), trendText(percentTrend(revenue, prevRevenue))],
+            ["New Members", newMembers.length, prevNewMembers.length, trendText(percentTrend(newMembers.length, prevNewMembers.length))],
+            ["Renewals", renewals.length, prevRenewals.length, trendText(percentTrend(renewals.length, prevRenewals.length))],
+            ["Churned", churned.length, prevChurned.length, trendText(percentTrend(churned.length, prevChurned.length, { invert: true }))],
+            ["Visits", visits.length, prevVisits.length, trendText(percentTrend(visits.length, prevVisits.length))],
+            ["Leads Converted", conversions.length, prevConversions.length, trendText(percentTrend(conversions.length, prevConversions.length))],
+          ],
+        },
+        ...(dailyRevenue.length > 0
+          ? [{ title: "Revenue by day", headers: ["Date", "Revenue (£)"], rows: dailyRevenue.map((d) => [d.label, d.revenue]) }]
+          : []),
+        ...(dailyVisits.length > 0
+          ? [{ title: "Visits by day", headers: ["Date", "Visits"], rows: dailyVisits.map((d) => [d.label, d.visits]) }]
+          : []),
+        ...(leadsBySource.length > 0
+          ? [{ title: "New leads by source", headers: ["Source", "New leads"], rows: leadsBySource.map((s) => [s.source, s.count]) }]
+          : []),
+        ...(insights.length > 0
+          ? [{ title: "Needs attention", headers: ["Priority", "Item"], rows: insights.map((i) => [i.severity, i.message]) }]
+          : []),
+      ];
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -158,12 +195,26 @@ export function ReportsOverviewTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <PrintReportHeader reportLabel="Overview Report" scopeLabel={scopeLabel} />
+
+      <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium text-foreground">{period.label}</p>
           <p className="text-xs text-muted-foreground">{period.comparisonLabel}</p>
         </div>
-        <PeriodFilter preset={preset} customRange={customRange} maxDate={TODAY} onChange={handlePeriodChange} />
+        <div className="flex flex-wrap items-center gap-2">
+          <PeriodFilter preset={preset} customRange={customRange} maxDate={TODAY} onChange={handlePeriodChange} />
+          <ReportActions
+            reportLabel="Overview Report"
+            scopeLabel={scopeLabel}
+            sections={csvSections}
+            emptyReason={
+              outOfCoverage
+                ? "No historical data is available for this date range."
+                : "There's no activity in this period to export or print yet."
+            }
+          />
+        </div>
       </div>
 
       {outOfCoverage ? (
