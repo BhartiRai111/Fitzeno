@@ -27,8 +27,10 @@ import { BookPtDialog } from "@/components/portal/book-pt-dialog";
 import { useBookings } from "@/components/portal/bookings-provider";
 import { memberNotifications } from "@/lib/data/notifications";
 import { trainers } from "@/lib/data/trainers";
+import { attendanceRecords } from "@/lib/data/attendance";
 import { daysBetween } from "@/lib/utils-data";
 import { formatOccurrence } from "@/lib/booking-helpers";
+import { DEMO_MEMBER_ID, getCurrentStreak, getVisitsInMonth } from "@/lib/attendance-helpers";
 
 const currentMember = {
   name: "Aisha Patel",
@@ -48,6 +50,8 @@ export default function MemberDashboardPage() {
   const isExpiringSoon = daysLeft <= 14;
   const favoriteTrainer = trainers[0];
   const maxVisits = Math.max(...weeklyVisits);
+  const streak = getCurrentStreak(attendanceRecords, DEMO_MEMBER_ID);
+  const visitsThisMonth = getVisitsInMonth(attendanceRecords, DEMO_MEMBER_ID);
 
   const upcomingClassItems = myClassBookings
     .filter((v) => v.booking.status === "booked")
@@ -199,11 +203,11 @@ export default function MemberDashboardPage() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <div>
               <CardTitle>Attendance this week</CardTitle>
-              <CardDescription>27 visits this month · 12-day streak</CardDescription>
+              <CardDescription>{visitsThisMonth} visits this month · {streak}-day streak</CardDescription>
             </div>
             <div className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
               <Flame className="size-4 text-brand-lime-500" />
-              12
+              {streak}
             </div>
           </CardHeader>
           <CardContent>

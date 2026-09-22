@@ -22,4 +22,10 @@ export const classBookings: ClassBooking[] = [
   { id: "cb-17", classId: "cl-2", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", bookedOn: "2026-09-08", status: "attended" },
   { id: "cb-18", classId: "cl-13", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", bookedOn: "2026-09-10", status: "no-show" },
   { id: "cb-19", classId: "cl-7", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", bookedOn: "2026-09-05", status: "cancelled" },
+
+  // Today's (Mon) Strength Fundamentals roster for Maya Okonkwo (tr-1) — trainer attendance marking demo
+  { id: "cb-20", classId: "cl-2", memberId: "m-6", memberName: "Ravi Shankar", memberInitials: "RS", bookedOn: "2026-09-19", status: "booked" },
+  { id: "cb-21", classId: "cl-2", memberId: "m-13", memberName: "Sofia Almeida", memberInitials: "SA", bookedOn: "2026-09-20", status: "booked" },
+  { id: "cb-22", classId: "cl-2", memberId: "m-20", memberName: "Samuel Okoye", memberInitials: "SO", bookedOn: "2026-09-20", status: "booked" },
+  { id: "cb-23", classId: "cl-2", memberId: "m-16", memberName: "Ben Foster", memberInitials: "BF", bookedOn: "2026-09-18", status: "no-show" },
 ];

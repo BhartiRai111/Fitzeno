@@ -76,7 +76,13 @@ export default function TrainerDashboardPage() {
               <CardTitle>Today&apos;s agenda</CardTitle>
               <CardDescription>Monday, September 21</CardDescription>
             </div>
-            <CardAction>
+            <CardAction className="flex items-center gap-1">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/trainer/attendance">
+                  <CheckCircle2 className="size-3.5" />
+                  Take Attendance
+                </Link>
+              </Button>
               <Button variant="ghost" size="sm" asChild>
                 <Link href="/trainer/schedule">
                   Full schedule

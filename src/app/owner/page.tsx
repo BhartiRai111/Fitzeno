@@ -105,7 +105,7 @@ export default function OwnerOverviewPage() {
       id: "a4",
       severity: "medium",
       message: `${inactive14Plus.length} members inactive for 14+ days`,
-      href: "/owner/attendance?tab=history",
+      href: "/owner/attendance?tab=insights",
     },
     {
       id: "a5",

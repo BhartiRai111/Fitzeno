@@ -25,6 +25,20 @@ export const attendanceRecords: AttendanceRecord[] = [
   { id: "at-16", memberId: "m-13", memberName: "Sofia Almeida", memberInitials: "SA", plan: "Growth", date: "2026-09-19", checkInTime: "07:10", checkOutTime: "08:05", method: "QR Check-in" },
   { id: "at-17", memberId: "m-10", memberName: "Oliver Bennett", memberInitials: "OB", plan: "Elite", date: "2026-09-19", checkInTime: "18:00", checkOutTime: "19:15", method: "QR Check-in" },
   { id: "at-18", memberId: "m-6", memberName: "Ravi Shankar", memberInitials: "RS", plan: "Growth", date: "2026-09-18", checkInTime: "07:00", checkOutTime: "07:55", method: "QR Check-in" },
+
+  // Aisha Patel (m-1, the signed-in demo member) — realistic visit history for streak/stats
+  { id: "at-25", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-19", checkInTime: "07:05", checkOutTime: "08:00", method: "QR Check-in" },
+  { id: "at-26", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-18", checkInTime: "08:50", checkOutTime: "09:45", method: "QR Check-in" },
+  { id: "at-27", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-16", checkInTime: "07:15", checkOutTime: "08:10", method: "QR Check-in" },
+  { id: "at-28", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-15", checkInTime: "17:40", checkOutTime: "18:35", method: "QR Check-in" },
+  { id: "at-29", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-13", checkInTime: "09:00", checkOutTime: "10:05", method: "QR Check-in" },
+  { id: "at-30", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-11", checkInTime: "07:20", checkOutTime: "08:15", method: "QR Check-in" },
+  { id: "at-31", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-09", checkInTime: "08:05", checkOutTime: "09:00", method: "Manual" },
+  { id: "at-32", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-08", checkInTime: "17:50", checkOutTime: "18:40", method: "QR Check-in" },
+  { id: "at-33", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-05", checkInTime: "07:10", checkOutTime: "08:05", method: "QR Check-in" },
+  { id: "at-34", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-04", checkInTime: "08:30", checkOutTime: "09:20", method: "QR Check-in" },
+  { id: "at-35", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-02", checkInTime: "07:00", checkOutTime: "07:50", method: "QR Check-in" },
+  { id: "at-36", memberId: "m-1", memberName: "Aisha Patel", memberInitials: "AP", plan: "Growth", date: "2026-09-01", checkInTime: "09:10", checkOutTime: "10:00", method: "Kiosk" },
 ];
 
 export const peakHours = [
@@ -54,4 +68,13 @@ export const weeklyAttendance = [
   { day: "Fri", visits: 285 },
   { day: "Sat", visits: 198 },
   { day: "Sun", visits: 142 },
+];
+
+export const monthlyAttendance = [
+  { month: "Apr", visits: 6120 },
+  { month: "May", visits: 6480 },
+  { month: "Jun", visits: 6890 },
+  { month: "Jul", visits: 6540 },
+  { month: "Aug", visits: 7210 },
+  { month: "Sep", visits: 7480 },
 ];
