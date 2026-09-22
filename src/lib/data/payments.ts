@@ -1,7 +1,7 @@
 import type { Payment } from "./types";
 
 export const payments: Payment[] = [
-  { id: "p-1", memberName: "Aisha Patel", memberInitials: "AP", amount: 69, method: "Card", status: "paid", plan: "Growth", category: "Membership", date: "2026-09-14", invoiceId: "INV-10241" },
+  { id: "p-1", memberName: "Aisha Patel", memberInitials: "AP", amount: 69, method: "Card", status: "paid", plan: "Growth", category: "Membership", date: "2026-08-27", invoiceId: "INV-10241" },
   { id: "p-2", memberName: "Tom Bradley", memberInitials: "TB", amount: 119, method: "Card", status: "paid", plan: "Elite", category: "Membership", date: "2026-09-02", invoiceId: "INV-10238" },
   { id: "p-3", memberName: "Grace Kim", memberInitials: "GK", amount: 39, method: "UPI", status: "failed", plan: "Basic", category: "Membership", date: "2026-09-08", invoiceId: "INV-10240" },
   { id: "p-4", memberName: "Ravi Shankar", memberInitials: "RS", amount: 69, method: "Bank Transfer", status: "paid", plan: "Growth", category: "Membership", date: "2026-08-30", invoiceId: "INV-10233" },
@@ -19,6 +19,7 @@ export const payments: Payment[] = [
   { id: "p-16", memberName: "Ravi Shankar", memberInitials: "RS", amount: 12, method: "UPI", status: "paid", plan: "Drop-in class", category: "Classes", date: "2026-09-18", invoiceId: "INV-10254" },
   { id: "p-17", memberName: "Nadia Hassan", memberInitials: "NH", amount: 8, method: "Card", status: "paid", plan: "Protein shake", category: "Retail", date: "2026-09-17", invoiceId: "INV-10255" },
   { id: "p-18", memberName: "Oliver Bennett", memberInitials: "OB", amount: 25, method: "Card", status: "paid", plan: "Guest pass", category: "Other", date: "2026-09-16", invoiceId: "INV-10256" },
+  { id: "p-19", memberName: "Aisha Patel", memberInitials: "AP", amount: 69, method: "Card", status: "failed", plan: "Growth", category: "Membership", date: "2026-07-27", invoiceId: "INV-10218" },
 ];
 
 export const revenueByMonth = [

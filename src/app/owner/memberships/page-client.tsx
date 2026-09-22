@@ -16,8 +16,9 @@ import { OwnerPlanCard } from "@/components/dashboard/owner-plan-card";
 import { PlanDialog } from "@/components/dashboard/dialogs/plan-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { CalendarCheck2 } from "lucide-react";
-import { members } from "@/lib/data/members";
+import { members as initialMembers } from "@/lib/data/members";
 import { membershipPlans } from "@/lib/data/plans";
+import { getPlanByName, computeNextExpiry } from "@/lib/membership-helpers";
 import { formatDate, daysBetween } from "@/lib/utils-data";
 import type { Member } from "@/lib/data/types";
 
@@ -25,7 +26,15 @@ const TODAY = "2026-09-21";
 
 type TabValue = "plans" | "active" | "expiring" | "expired" | "renewals";
 
-function MemberTable({ rows, emphasizeRenew = false }: { rows: Member[]; emphasizeRenew?: boolean }) {
+function MemberTable({
+  rows,
+  emphasizeRenew = false,
+  onRenew,
+}: {
+  rows: Member[];
+  emphasizeRenew?: boolean;
+  onRenew: (memberId: string) => void;
+}) {
   if (rows.length === 0) {
     return <EmptyState icon={CalendarCheck2} title="Nothing here" description="No members match this view." />;
   }
@@ -72,7 +81,7 @@ function MemberTable({ rows, emphasizeRenew = false }: { rows: Member[]; emphasi
                     title={`Renew ${member.name}'s membership?`}
                     description={`Extend their ${member.plan} plan by one billing cycle.`}
                     confirmLabel="Renew Membership"
-                    onConfirm={() => toast.success(`${member.name}'s membership renewed`)}
+                    onConfirm={() => onRenew(member.id)}
                   />
                 </td>
               </tr>
@@ -89,6 +98,7 @@ export function MembershipsPageClient() {
   const initialTab = (searchParams.get("tab") as TabValue) ?? "plans";
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
+  const [members, setMembers] = React.useState<Member[]>(initialMembers);
 
   const activeMembers = members.filter((m) => m.status === "active");
   const expiringMembers = members.filter((m) => m.status === "expiring");
@@ -100,6 +110,19 @@ export function MembershipsPageClient() {
   function applySearch(rows: Member[]) {
     if (!search.trim()) return rows;
     return rows.filter((m) => m.name.toLowerCase().includes(search.toLowerCase()));
+  }
+
+  function handleRenew(memberId: string) {
+    const member = members.find((m) => m.id === memberId);
+    if (!member) return;
+    const plan = getPlanByName(member.plan);
+    const newExpiry = computeNextExpiry(member.expiresOn, TODAY, plan?.billingPeriod ?? "month");
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.id === memberId ? { ...m, status: "active", expiresOn: newExpiry, paymentStatus: "paid" } : m
+      )
+    );
+    toast.success(`${member.name}'s membership renewed`, { description: `Now active until ${formatDate(newExpiry)}.` });
   }
 
   return (
@@ -138,10 +161,10 @@ export function MembershipsPageClient() {
                 className="sm:max-w-xs"
               />
             </Card>
-            {value === "active" && <MemberTable rows={applySearch(activeMembers)} />}
-            {value === "expiring" && <MemberTable rows={applySearch(expiringMembers)} emphasizeRenew />}
-            {value === "expired" && <MemberTable rows={applySearch(expiredMembers)} emphasizeRenew />}
-            {value === "renewals" && <MemberTable rows={applySearch(renewalQueue)} emphasizeRenew />}
+            {value === "active" && <MemberTable rows={applySearch(activeMembers)} onRenew={handleRenew} />}
+            {value === "expiring" && <MemberTable rows={applySearch(expiringMembers)} emphasizeRenew onRenew={handleRenew} />}
+            {value === "expired" && <MemberTable rows={applySearch(expiredMembers)} emphasizeRenew onRenew={handleRenew} />}
+            {value === "renewals" && <MemberTable rows={applySearch(renewalQueue)} emphasizeRenew onRenew={handleRenew} />}
           </TabsContent>
         ))}
       </Tabs>

@@ -25,29 +25,22 @@ import { BookingStatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { BookPtDialog } from "@/components/portal/book-pt-dialog";
 import { useBookings } from "@/components/portal/bookings-provider";
+import { useMembership } from "@/components/portal/membership-provider";
 import { memberNotifications } from "@/lib/data/notifications";
 import { trainers } from "@/lib/data/trainers";
 import { attendanceRecords } from "@/lib/data/attendance";
-import { daysBetween } from "@/lib/utils-data";
+import { formatDate } from "@/lib/utils-data";
 import { formatOccurrence } from "@/lib/booking-helpers";
 import { DEMO_MEMBER_ID, getCurrentStreak, getVisitsInMonth } from "@/lib/attendance-helpers";
-
-const currentMember = {
-  name: "Aisha Patel",
-  planName: "Growth",
-  expiresOn: "27 Sep 2026",
-  expiresOnRaw: "2026-09-27",
-};
 
 const weeklyVisits = [3, 4, 2, 5, 4, 6, 3];
 
 export default function MemberDashboardPage() {
   const { myClassBookings, myPtSessions } = useBookings();
+  const { member, daysLeft, isExpiringSoon, membershipBlock } = useMembership();
   const [ptDialogOpen, setPtDialogOpen] = React.useState(false);
   const [ptPreselectTrainer, setPtPreselectTrainer] = React.useState<string | undefined>();
 
-  const daysLeft = daysBetween("2026-09-21", currentMember.expiresOnRaw);
-  const isExpiringSoon = daysLeft <= 14;
   const favoriteTrainer = trainers[0];
   const maxVisits = Math.max(...weeklyVisits);
   const streak = getCurrentStreak(attendanceRecords, DEMO_MEMBER_ID);
@@ -101,20 +94,36 @@ export default function MemberDashboardPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`Welcome back, ${currentMember.name.split(" ")[0]}`}
+        title={`Welcome back, ${member.name.split(" ")[0]}`}
         description="Here's your training snapshot for this week."
       />
 
-      {isExpiringSoon && (
+      {membershipBlock ? (
+        <Card className="flex flex-col gap-3 border-danger/30 bg-danger-tint p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">{membershipBlock.title}</p>
+              <p className="text-sm text-muted-foreground">{membershipBlock.detail}</p>
+            </div>
+          </div>
+          <Button size="sm" asChild className="shrink-0">
+            <Link href="/portal/membership">Reactivate Membership</Link>
+          </Button>
+        </Card>
+      ) : isExpiringSoon && (
         <Card className="flex flex-col gap-3 border-warning/30 bg-warning-tint p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" />
             <div>
               <p className="text-sm font-semibold text-foreground">
-                Your membership renews in {daysLeft} days
+                Your membership renews in {daysLeft} day{daysLeft === 1 ? "" : "s"}
               </p>
               <p className="text-sm text-muted-foreground">
-                Your Growth plan renews on {currentMember.expiresOn}. Update your payment method or renew early.
+                Your {member.plan} plan renews on {formatDate(member.expiresOn)}.{" "}
+                {member.autoRenew
+                  ? "Your payment method on file will be charged automatically."
+                  : "Auto-renew is off — renew manually to keep your access."}
               </p>
             </div>
           </div>
@@ -126,9 +135,9 @@ export default function MemberDashboardPage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <MembershipCard
-          memberName={currentMember.name}
-          planName={currentMember.planName}
-          expiresOn={currentMember.expiresOn}
+          memberName={member.name}
+          planName={member.plan}
+          expiresOn={formatDate(member.expiresOn)}
           daysLeft={daysLeft}
           className="lg:col-span-1"
         />

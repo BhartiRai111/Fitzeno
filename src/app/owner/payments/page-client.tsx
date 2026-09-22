@@ -20,16 +20,26 @@ import {
 } from "@/components/ui/select";
 import { StatCard } from "@/components/shared/stat-card";
 import { PaymentStatusBadge } from "@/components/shared/status-badge";
-import { RecordPaymentDialog } from "@/components/dashboard/dialogs/record-payment-dialog";
+import { RecordPaymentDialog, type RecordPaymentInput } from "@/components/dashboard/dialogs/record-payment-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { InvoiceDialog } from "@/components/dashboard/dialogs/invoice-dialog";
-import { payments, revenueByMonth } from "@/lib/data/payments";
+import { payments as initialPayments, revenueByMonth } from "@/lib/data/payments";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
 import type { Payment } from "@/lib/data/types";
 
+const TODAY = "2026-09-21";
+
 type TabValue = "transactions" | "pending" | "membership" | "refunds" | "invoices";
 
-function PaymentsTable({ rows, showRefund = false }: { rows: Payment[]; showRefund?: boolean }) {
+function PaymentsTable({
+  rows,
+  showRefund = false,
+  onRefund,
+}: {
+  rows: Payment[];
+  showRefund?: boolean;
+  onRefund: (paymentId: string) => void;
+}) {
   if (rows.length === 0) {
     return <EmptyState icon={Receipt} title="No payments here" description="Nothing matches this view yet." />;
   }
@@ -76,7 +86,7 @@ function PaymentsTable({ rows, showRefund = false }: { rows: Payment[]; showRefu
                         description="This reverses the charge back to their original payment method."
                         confirmLabel="Issue Refund"
                         destructive
-                        onConfirm={() => toast.success(`Refund issued for ${payment.invoiceId}`)}
+                        onConfirm={() => onRefund(payment.id)}
                       />
                     )}
                   </div>
@@ -96,6 +106,27 @@ export function PaymentsPageClient() {
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("all");
+  const [payments, setPayments] = React.useState<Payment[]>(initialPayments);
+
+  function handleRecord(input: RecordPaymentInput) {
+    const newPayment: Payment = {
+      id: `p-${Date.now()}`,
+      invoiceId: `INV-${10300 + payments.length}`,
+      date: TODAY,
+      status: "paid",
+      ...input,
+    };
+    setPayments((prev) => [newPayment, ...prev]);
+  }
+
+  function handleRefund(paymentId: string) {
+    const payment = payments.find((p) => p.id === paymentId);
+    if (!payment) return;
+    setPayments((prev) => prev.map((p) => (p.id === paymentId ? { ...p, status: "refunded" } : p)));
+    toast.success(`Refund issued for ${payment.invoiceId}`, {
+      description: `${formatCurrency(payment.amount)} returned to ${payment.memberName}.`,
+    });
+  }
 
   const totalRevenue = revenueByMonth[revenueByMonth.length - 1].revenue;
   const pendingAmount = payments.filter((p) => p.status === "pending").reduce((s, p) => s + p.amount, 0);
@@ -120,7 +151,7 @@ export function PaymentsPageClient() {
       <PageHeader
         title="Payments & Billing"
         description="Transactions, invoices, and billing health"
-        actions={<RecordPaymentDialog />}
+        actions={<RecordPaymentDialog onRecord={handleRecord} />}
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -160,11 +191,11 @@ export function PaymentsPageClient() {
             </Select>
           </Card>
 
-          {tab === "transactions" && <PaymentsTable rows={transactions} showRefund />}
-          {tab === "pending" && <PaymentsTable rows={pending} />}
-          {tab === "membership" && <PaymentsTable rows={membershipPayments} showRefund />}
-          {tab === "refunds" && <PaymentsTable rows={refunds} />}
-          {tab === "invoices" && <PaymentsTable rows={invoices} />}
+          {tab === "transactions" && <PaymentsTable rows={transactions} showRefund onRefund={handleRefund} />}
+          {tab === "pending" && <PaymentsTable rows={pending} onRefund={handleRefund} />}
+          {tab === "membership" && <PaymentsTable rows={membershipPayments} showRefund onRefund={handleRefund} />}
+          {tab === "refunds" && <PaymentsTable rows={refunds} onRefund={handleRefund} />}
+          {tab === "invoices" && <PaymentsTable rows={invoices} onRefund={handleRefund} />}
         </TabsContent>
       </Tabs>
     </div>

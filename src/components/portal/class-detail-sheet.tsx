@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { CapacityBar } from "@/components/shared/capacity-bar";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBookings } from "@/components/portal/bookings-provider";
+import { useMembership } from "@/components/portal/membership-provider";
 import { trainers } from "@/lib/data/trainers";
 import { DEMO_MEMBER_ID, formatOccurrence, getMemberScheduleConflicts } from "@/lib/booking-helpers";
 import type { GymClass } from "@/lib/data/types";
@@ -27,6 +28,7 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const { classes, bookings, myPtSessions, getStatusForClass, getWaitlistPosition, bookClass, cancelClassBooking } =
     useBookings();
+  const { membershipBlock } = useMembership();
   const [justBooked, setJustBooked] = React.useState(false);
 
   React.useEffect(() => {
@@ -145,6 +147,13 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
           </div>
         )}
 
+        {!status && membershipBlock && (
+          <div className="flex items-start gap-2.5 rounded-md bg-danger-tint px-3 py-2.5 text-sm text-danger">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <span>{membershipBlock.title} — {membershipBlock.detail}</span>
+          </div>
+        )}
+
         <p className="text-xs text-muted-foreground">
           Free cancellation up to 4 hours before class. Late cancellations count toward your monthly credit.
         </p>
@@ -164,10 +173,9 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
         ) : (
           <Button
             className="w-full"
-            disabled={conflicts.length > 0}
+            disabled={conflicts.length > 0 || !!membershipBlock}
             onClick={() => {
-              bookClass(live.id);
-              setJustBooked(true);
+              if (bookClass(live.id)) setJustBooked(true);
             }}
           >
             {isFull ? "Join Waitlist" : "Book Class"}

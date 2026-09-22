@@ -33,18 +33,22 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { EditMemberDialog } from "@/components/dashboard/dialogs/edit-member-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
-import { members } from "@/lib/data/members";
+import { members as initialMembers } from "@/lib/data/members";
 import { trainers } from "@/lib/data/trainers";
 import { payments } from "@/lib/data/payments";
 import { attendanceRecords } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
 import { gymClasses } from "@/lib/data/classes";
 import { ptSessions } from "@/lib/data/pt-sessions";
+import { getPlanByName, computeNextExpiry } from "@/lib/membership-helpers";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
+
+const TODAY = "2026-09-21";
 
 export default function MemberDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const [members, setMembers] = React.useState(initialMembers);
   const member = members.find((m) => m.id === params.id);
   const [noteDraft, setNoteDraft] = React.useState("");
   const [notes, setNotes] = React.useState(member?.notes ?? []);
@@ -76,6 +80,19 @@ export default function MemberDetailPage() {
     toast.success("Note added");
   }
 
+  function updateMemberStatus(status: "active" | "frozen" | "cancelled", extendExpiry = false) {
+    if (!member) return;
+    setMembers((prev) =>
+      prev.map((m) => {
+        if (m.id !== member.id) return m;
+        if (!extendExpiry) return { ...m, status };
+        const plan = getPlanByName(m.plan);
+        const newExpiry = computeNextExpiry(m.expiresOn, TODAY, plan?.billingPeriod ?? "month");
+        return { ...m, status, expiresOn: newExpiry, paymentStatus: "paid" };
+      })
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Button variant="ghost" size="sm" className="-ml-2" onClick={() => router.push("/owner/members")}>
@@ -94,22 +111,44 @@ export default function MemberDetailPage() {
               title={`Renew ${member.name}'s membership?`}
               description={`This will extend their ${member.plan} plan by one billing cycle.`}
               confirmLabel="Renew Membership"
-              onConfirm={() => toast.success(`${member.name}'s membership renewed`)}
+              onConfirm={() => {
+                updateMemberStatus("active", true);
+                toast.success(`${member.name}'s membership renewed`);
+              }}
             />
-            <ConfirmActionDialog
-              trigger={<Button size="sm" variant="outline"><Snowflake className="size-4" />Freeze</Button>}
-              title={`Freeze ${member.name}'s membership?`}
-              description="Their billing and access will pause until unfrozen."
-              confirmLabel="Freeze Membership"
-              onConfirm={() => toast.success(`${member.name}'s membership frozen`)}
-            />
+            {member.status === "frozen" ? (
+              <ConfirmActionDialog
+                trigger={<Button size="sm" variant="outline"><Snowflake className="size-4" />Unfreeze</Button>}
+                title={`Unfreeze ${member.name}'s membership?`}
+                description="Their billing and access will resume immediately."
+                confirmLabel="Unfreeze Membership"
+                onConfirm={() => {
+                  updateMemberStatus("active");
+                  toast.success(`${member.name}'s membership unfrozen`);
+                }}
+              />
+            ) : (
+              <ConfirmActionDialog
+                trigger={<Button size="sm" variant="outline"><Snowflake className="size-4" />Freeze</Button>}
+                title={`Freeze ${member.name}'s membership?`}
+                description="Their billing and access will pause until unfrozen."
+                confirmLabel="Freeze Membership"
+                onConfirm={() => {
+                  updateMemberStatus("frozen");
+                  toast.success(`${member.name}'s membership frozen`);
+                }}
+              />
+            )}
             <ConfirmActionDialog
               trigger={<Button size="sm" variant="destructive"><Ban className="size-4" />Cancel</Button>}
               title={`Cancel ${member.name}'s membership?`}
               description="This cancels their plan at the end of the current billing period."
               confirmLabel="Cancel Membership"
               destructive
-              onConfirm={() => toast.success(`${member.name}'s membership cancelled`)}
+              onConfirm={() => {
+                updateMemberStatus("cancelled");
+                toast.success(`${member.name}'s membership cancelled`);
+              }}
             />
           </>
         }

@@ -16,6 +16,7 @@ export const memberNotifications: NotificationItem[] = [
   { id: "mn-4", type: "booking", title: "Waitlist update", description: "A spot opened up in Boxing Conditioning — you're now booked.", timestamp: "2 days ago", read: true },
   { id: "mn-5", type: "payment", title: "Payment receipt", description: "Receipt for £69 (Growth plan) is ready to download.", timestamp: "3 days ago", read: true },
   { id: "mn-6", type: "system", title: "4-day streak!", description: "You've checked in 4 days in a row — keep it going.", timestamp: "This morning", read: false },
+  { id: "mn-7", type: "payment", title: "Payment failed", description: "Your card was declined for the Growth plan renewal. Please update your payment method.", timestamp: "3 weeks ago", read: true },
 ];
 
 export const trainerNotifications: NotificationItem[] = [

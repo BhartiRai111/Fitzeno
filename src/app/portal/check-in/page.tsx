@@ -21,7 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
-import { members } from "@/lib/data/members";
+import { useMembership } from "@/components/portal/membership-provider";
 import { attendanceRecords } from "@/lib/data/attendance";
 import { gymProfile } from "@/lib/data/gym";
 import {
@@ -30,7 +30,6 @@ import {
   getMemberRecords,
   getVisitsInMonth,
   getCurrentStreak,
-  getMembershipBlock,
   getGymOpenState,
   nowTimeLabel,
   minutesBetween,
@@ -40,12 +39,11 @@ import { formatDate } from "@/lib/utils-data";
 type FlowState = "idle" | "success" | "checked-out";
 
 export default function CheckInPage() {
-  const member = members.find((m) => m.id === DEMO_MEMBER_ID)!;
+  const { member, membershipBlock } = useMembership();
   const records = getMemberRecords(attendanceRecords, DEMO_MEMBER_ID);
   const streak = getCurrentStreak(attendanceRecords, DEMO_MEMBER_ID);
   const visitsThisMonth = getVisitsInMonth(attendanceRecords, DEMO_MEMBER_ID);
   const priorVisitToday = records.find((r) => r.date === TODAY);
-  const membershipBlock = getMembershipBlock(member.status);
   const gymOpen = getGymOpenState();
 
   const [flow, setFlow] = React.useState<FlowState>("idle");

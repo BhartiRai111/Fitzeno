@@ -44,3 +44,20 @@ export const membershipPlans: MembershipPlan[] = [
     ],
   },
 ];
+
+export interface PlanComparisonRow {
+  feature: string;
+  basic: boolean | string;
+  growth: boolean | string;
+  elite: boolean | string;
+}
+
+export const planComparisonRows: PlanComparisonRow[] = [
+  { feature: "Gym floor access", basic: true, growth: true, elite: true },
+  { feature: "Locker & shower access", basic: true, growth: true, elite: true },
+  { feature: "Group classes", basic: "1 credit / mo", growth: "Unlimited", elite: "Unlimited" },
+  { feature: "Priority class booking", basic: false, growth: true, elite: true },
+  { feature: "Personal training sessions", basic: false, growth: "1 / mo", elite: "4 / mo" },
+  { feature: "Guest passes", basic: false, growth: "2 / mo", elite: "Unlimited" },
+  { feature: "Nutrition coaching", basic: false, growth: false, elite: true },
+];

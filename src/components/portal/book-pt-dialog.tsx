@@ -46,8 +46,8 @@ export function BookPtDialog({ open, onOpenChange, preselectedTrainerId }: BookP
 
   function handleConfirm(slot: FreeSlot) {
     if (!trainerId) return;
-    bookPt({ trainerId, day: slot.day, occurrenceDate: slot.occurrenceDate, startTime: slot.startTime, duration: 45 });
-    setConfirmedSlot(slot);
+    const ok = bookPt({ trainerId, day: slot.day, occurrenceDate: slot.occurrenceDate, startTime: slot.startTime, duration: 45 });
+    if (ok) setConfirmedSlot(slot);
   }
 
   return (

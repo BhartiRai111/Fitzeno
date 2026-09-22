@@ -57,7 +57,13 @@ export function RegisterPageClient() {
     setSubmitting(true);
     setTimeout(() => {
       setSubmitting(false);
-      router.push("/portal");
+      if (preselectedPlan) {
+        const params = new URLSearchParams({ plan: preselectedPlan.id });
+        if (offerCode) params.set("offer", offerCode);
+        router.push(`/checkout?${params.toString()}`);
+      } else {
+        router.push("/portal");
+      }
     }, 900);
   }
 

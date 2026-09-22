@@ -3,22 +3,12 @@ import { Check, X } from "lucide-react";
 import { SectionHeading } from "@/components/shared/section-heading";
 import { PlanCard } from "@/components/public/plan-card";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
-import { membershipPlans } from "@/lib/data/plans";
+import { membershipPlans, planComparisonRows } from "@/lib/data/plans";
 import { faqs } from "@/lib/data/testimonials";
 
 export const metadata: Metadata = {
   title: "Membership Plans",
 };
-
-const comparisonRows = [
-  { feature: "Gym floor access", basic: true, growth: true, elite: true },
-  { feature: "Locker & shower access", basic: true, growth: true, elite: true },
-  { feature: "Group classes", basic: "1 credit / mo", growth: "Unlimited", elite: "Unlimited" },
-  { feature: "Priority class booking", basic: false, growth: true, elite: true },
-  { feature: "Personal training sessions", basic: false, growth: "1 / mo", elite: "4 / mo" },
-  { feature: "Guest passes", basic: false, growth: "2 / mo", elite: "Unlimited" },
-  { feature: "Nutrition coaching", basic: false, growth: false, elite: true },
-];
 
 function Cell({ value }: { value: boolean | string }) {
   if (typeof value === "string") return <span className="text-sm text-foreground">{value}</span>;
@@ -62,7 +52,7 @@ export default function PlansPage() {
               </tr>
             </thead>
             <tbody>
-              {comparisonRows.map((row) => (
+              {planComparisonRows.map((row) => (
                 <tr key={row.feature} className="border-b border-border last:border-0 hover:bg-muted/30">
                   <td className="px-4 py-3.5 font-medium text-foreground">{row.feature}</td>
                   <td className="px-4 py-3.5 text-center"><Cell value={row.basic} /></td>

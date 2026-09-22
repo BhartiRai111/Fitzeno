@@ -23,27 +23,68 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { members } from "@/lib/data/members";
+import { formatCurrency } from "@/lib/utils-data";
+import type { Payment, RevenueCategory } from "@/lib/data/types";
+
+export interface RecordPaymentInput {
+  memberName: string;
+  memberInitials: string;
+  amount: number;
+  method: Payment["method"];
+  category: RevenueCategory;
+  plan: string;
+}
 
 interface RecordPaymentDialogProps {
   trigger?: React.ReactNode;
+  onRecord?: (input: RecordPaymentInput) => void;
 }
 
-export function RecordPaymentDialog({ trigger }: RecordPaymentDialogProps) {
+const categoryLabels: Record<RevenueCategory, string> = {
+  Membership: "Membership renewal",
+  "Personal Training": "Personal training",
+  Classes: "Drop-in class",
+  Retail: "Retail / products",
+  Other: "Other",
+};
+
+export function RecordPaymentDialog({ trigger, onRecord }: RecordPaymentDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [memberId, setMemberId] = React.useState(members[0]?.id);
+  const [amount, setAmount] = React.useState("");
+  const [method, setMethod] = React.useState<Payment["method"]>("Card");
+  const [category, setCategory] = React.useState<RevenueCategory>("Membership");
+
+  function resetForm() {
+    setMemberId(members[0]?.id);
+    setAmount("");
+    setMethod("Card");
+    setCategory("Membership");
+  }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const amount = String(form.get("amount") ?? "");
+    const member = members.find((m) => m.id === memberId);
+    if (!member) return;
+    const numericAmount = Number(amount) || 0;
+
     setSubmitting(true);
     setTimeout(() => {
       setSubmitting(false);
       setOpen(false);
-      toast.success("Payment recorded", {
-        description: `£${amount || "0"} has been logged and a receipt will be sent.`,
+      onRecord?.({
+        memberName: member.name,
+        memberInitials: member.initials,
+        amount: numericAmount,
+        method,
+        category,
+        plan: category === "Membership" ? member.plan : categoryLabels[category],
       });
-      (event.target as HTMLFormElement).reset();
+      toast.success("Payment recorded", {
+        description: `${formatCurrency(numericAmount)} logged for ${member.name}.`,
+      });
+      resetForm();
     }, 700);
   }
 
@@ -65,7 +106,7 @@ export function RecordPaymentDialog({ trigger }: RecordPaymentDialogProps) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label>Member</Label>
-            <Select defaultValue={members[0]?.id}>
+            <Select value={memberId} onValueChange={setMemberId}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -81,11 +122,20 @@ export function RecordPaymentDialog({ trigger }: RecordPaymentDialogProps) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="record-payment-amount">Amount (£)</Label>
-              <Input id="record-payment-amount" name="amount" type="number" min="0" step="0.01" placeholder="69.00" required />
+              <Input
+                id="record-payment-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="69.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                required
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Method</Label>
-              <Select defaultValue="Card">
+              <Select value={method} onValueChange={(v) => setMethod(v as Payment["method"])}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -100,16 +150,16 @@ export function RecordPaymentDialog({ trigger }: RecordPaymentDialogProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <Select defaultValue="Membership">
+            <Select value={category} onValueChange={(v) => setCategory(v as RevenueCategory)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="Membership">Membership renewal</SelectItem>
-                <SelectItem value="Personal Training">Personal training</SelectItem>
-                <SelectItem value="Classes">Drop-in class</SelectItem>
-                <SelectItem value="Retail">Retail / products</SelectItem>
-                <SelectItem value="Other">Other</SelectItem>
+                {(Object.keys(categoryLabels) as RevenueCategory[]).map((cat) => (
+                  <SelectItem key={cat} value={cat}>
+                    {categoryLabels[cat]}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

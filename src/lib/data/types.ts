@@ -82,6 +82,7 @@ export interface Member {
   trainerId?: string;
   paymentStatus: PaymentStatus;
   attendanceThisMonth: number;
+  autoRenew?: boolean;
   gender: "Male" | "Female" | "Other";
   dob: string;
   address: string;

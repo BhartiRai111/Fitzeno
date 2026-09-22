@@ -6,8 +6,8 @@ import { gymClasses as initialClasses } from "@/lib/data/classes";
 import { classBookings as initialBookings } from "@/lib/data/class-bookings";
 import { ptSessions as initialPtSessions } from "@/lib/data/pt-sessions";
 import { trainers } from "@/lib/data/trainers";
-import { members } from "@/lib/data/members";
 import { DEMO_MEMBER_ID, TODAY, getNextOccurrenceDate, formatOccurrence } from "@/lib/booking-helpers";
+import { useMembership } from "@/components/portal/membership-provider";
 import { formatDate } from "@/lib/utils-data";
 import type { GymClass, ClassBooking, PtSession } from "@/lib/data/types";
 
@@ -36,10 +36,10 @@ interface BookingsContextValue {
   myPtSessions: PtSession[];
   getStatusForClass: (classId: string) => "booked" | "waitlisted" | null;
   getWaitlistPosition: (classId: string) => number | null;
-  bookClass: (classId: string) => void;
+  bookClass: (classId: string) => boolean;
   cancelClassBooking: (bookingId: string) => void;
   rescheduleClassBooking: (bookingId: string, newClassId: string) => void;
-  bookPt: (input: BookPtInput) => void;
+  bookPt: (input: BookPtInput) => boolean;
   cancelPt: (sessionId: string) => void;
 }
 
@@ -50,7 +50,7 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
   const [bookings, setBookings] = React.useState<ClassBooking[]>(initialBookings);
   const [ptSessions, setPtSessions] = React.useState<PtSession[]>(initialPtSessions);
 
-  const member = members.find((m) => m.id === DEMO_MEMBER_ID)!;
+  const { member, membershipBlock } = useMembership();
 
   const getStatusForClass = React.useCallback(
     (classId: string): "booked" | "waitlisted" | null => {
@@ -71,9 +71,13 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
     [bookings]
   );
 
-  function bookClass(classId: string, silent = false) {
+  function bookClass(classId: string, silent = false): boolean {
     const gymClass = classes.find((c) => c.id === classId);
-    if (!gymClass || getStatusForClass(classId)) return;
+    if (!gymClass || getStatusForClass(classId)) return false;
+    if (membershipBlock) {
+      toast.error(membershipBlock.title, { description: membershipBlock.detail });
+      return false;
+    }
 
     const isFull = gymClass.booked >= gymClass.capacity;
     const newBooking: ClassBooking = {
@@ -94,6 +98,7 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
         description: `${gymClass.name} · ${formatOccurrence(gymClass.day)} · ${gymClass.startTime}`,
       });
     }
+    return true;
   }
 
   function cancelClassBooking(bookingId: string, silent = false) {
@@ -137,7 +142,11 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  function bookPt(input: BookPtInput) {
+  function bookPt(input: BookPtInput): boolean {
+    if (membershipBlock) {
+      toast.error(membershipBlock.title, { description: membershipBlock.detail });
+      return false;
+    }
     const trainer = trainers.find((t) => t.id === input.trainerId);
     const newSession: PtSession = {
       id: `pt-${Date.now()}`,
@@ -154,6 +163,7 @@ export function BookingsProvider({ children }: { children: React.ReactNode }) {
     toast.success("Personal training booked!", {
       description: `with ${trainer?.name ?? "your trainer"} · ${formatDate(input.occurrenceDate)} · ${input.startTime}`,
     });
+    return true;
   }
 
   function cancelPt(sessionId: string) {
