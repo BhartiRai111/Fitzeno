@@ -20,6 +20,20 @@ export const payments: Payment[] = [
   { id: "p-17", memberName: "Nadia Hassan", memberInitials: "NH", amount: 8, method: "Card", status: "paid", plan: "Protein shake", category: "Retail", date: "2026-09-17", invoiceId: "INV-10255" },
   { id: "p-18", memberName: "Oliver Bennett", memberInitials: "OB", amount: 25, method: "Card", status: "paid", plan: "Guest pass", category: "Other", date: "2026-09-16", invoiceId: "INV-10256" },
   { id: "p-19", memberName: "Aisha Patel", memberInitials: "AP", amount: 69, method: "Card", status: "failed", plan: "Growth", category: "Membership", date: "2026-07-27", invoiceId: "INV-10218" },
+
+  // August backfill — supports month-over-month comparisons on Reports
+  { id: "p-20", memberName: "Lena Fischer", memberInitials: "LF", amount: 39, method: "UPI", status: "paid", plan: "Basic", category: "Membership", date: "2026-08-03", invoiceId: "INV-10219" },
+  { id: "p-21", memberName: "Hannah Wu", memberInitials: "HW", amount: 69, method: "Card", status: "paid", plan: "Growth", category: "Membership", date: "2026-08-05", invoiceId: "INV-10220" },
+  { id: "p-22", memberName: "Nadia Hassan", memberInitials: "NH", amount: 39, method: "Card", status: "paid", plan: "Basic", category: "Membership", date: "2026-08-08", invoiceId: "INV-10221" },
+  { id: "p-23", memberName: "Ethan Clarke", memberInitials: "EC", amount: 69, method: "Bank Transfer", status: "paid", plan: "Growth", category: "Membership", date: "2026-08-09", invoiceId: "INV-10222" },
+  { id: "p-24", memberName: "Zara Ahmed", memberInitials: "ZA", amount: 119, method: "Card", status: "paid", plan: "Elite", category: "Membership", date: "2026-08-11", invoiceId: "INV-10223" },
+  { id: "p-25", memberName: "Sofia Almeida", memberInitials: "SA", amount: 45, method: "Card", status: "paid", plan: "PT Session", category: "Personal Training", date: "2026-08-13", invoiceId: "INV-10224" },
+  { id: "p-26", memberName: "Liam O'Connor", memberInitials: "LO", amount: 39, method: "UPI", status: "paid", plan: "Basic", category: "Membership", date: "2026-08-15", invoiceId: "INV-10226" },
+  { id: "p-27", memberName: "Chidi Okafor", memberInitials: "CO", amount: 69, method: "Cash", status: "failed", plan: "Growth", category: "Membership", date: "2026-08-17", invoiceId: "INV-10227" },
+  { id: "p-28", memberName: "Oliver Bennett", memberInitials: "OB", amount: 119, method: "Card", status: "paid", plan: "Elite", category: "Membership", date: "2026-08-18", invoiceId: "INV-10228" },
+  { id: "p-29", memberName: "Isabelle Moreau", memberInitials: "IM", amount: 45, method: "Card", status: "paid", plan: "PT Session", category: "Personal Training", date: "2026-08-21", invoiceId: "INV-10229" },
+  { id: "p-30", memberName: "Ravi Shankar", memberInitials: "RS", amount: 12, method: "UPI", status: "paid", plan: "Drop-in class", category: "Classes", date: "2026-08-24", invoiceId: "INV-10230" },
+  { id: "p-31", memberName: "Tom Bradley", memberInitials: "TB", amount: 8, method: "Card", status: "paid", plan: "Protein shake", category: "Retail", date: "2026-08-28", invoiceId: "INV-10231" },
 ];
 
 export const revenueByMonth = [

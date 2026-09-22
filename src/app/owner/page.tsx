@@ -42,6 +42,7 @@ import { attendanceRecords, weeklyAttendance } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
 import { recentActivity } from "@/lib/data/activity";
 import { formatCurrency, formatDate, daysBetween } from "@/lib/utils-data";
+import { percentTrend } from "@/lib/reports-helpers";
 import type { AlertItem } from "@/lib/data/types";
 
 const TODAY = "2026-09-21";
@@ -58,6 +59,7 @@ export default function OwnerOverviewPage() {
     .filter((p) => p.date === TODAY && p.status === "paid")
     .reduce((sum, p) => sum + p.amount, 0);
   const monthlyRevenue = revenueByMonth[revenueByMonth.length - 1].revenue;
+  const prevMonthlyRevenue = revenueByMonth[revenueByMonth.length - 2].revenue;
 
   const todaysAttendance = attendanceRecords.filter((a) => a.date === TODAY);
   const weeklyAvg = Math.round(weeklyAttendance.reduce((sum, d) => sum + d.visits, 0) / weeklyAttendance.length);
@@ -165,8 +167,7 @@ export default function OwnerOverviewPage() {
           label="Active Members"
           value={activeMembers.length.toString()}
           icon={Users}
-          trend={{ value: "+4.2%", direction: "up" }}
-          helpText="vs last month"
+          helpText={`${Math.round((activeMembers.length / members.length) * 100)}% of all members`}
         />
         <StatCard
           label="New Members"
@@ -184,7 +185,7 @@ export default function OwnerOverviewPage() {
           label="Monthly Revenue"
           value={formatCurrency(monthlyRevenue)}
           icon={TrendingUp}
-          trend={{ value: "+5.1%", direction: "up" }}
+          trend={percentTrend(monthlyRevenue, prevMonthlyRevenue)}
           helpText="vs last month"
         />
         <StatCard

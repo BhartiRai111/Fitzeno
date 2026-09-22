@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Star } from "lucide-react";
+import { Star, ArrowRight, AlertTriangle } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatCard } from "@/components/shared/stat-card";
 import { RevenueChart } from "@/components/dashboard/charts/revenue-chart";
@@ -15,28 +17,42 @@ import { MembershipDistributionChart } from "@/components/dashboard/charts/membe
 import { MemberGrowthChart } from "@/components/dashboard/charts/member-growth-chart";
 import { WeeklyAttendanceChart } from "@/components/dashboard/charts/weekly-attendance-chart";
 import { PeakHoursChart } from "@/components/dashboard/charts/peak-hours-chart";
+import { ReportsOverviewTab } from "@/components/dashboard/reports/overview-tab";
 import { Wallet, Users, UserMinus, TrendingUp } from "lucide-react";
 
 import { members } from "@/lib/data/members";
 import { revenueByMonth, revenueByCategory, revenueByPlan } from "@/lib/data/payments";
 import { memberGrowth, retentionByCohort, churnReasons, classPerformance, trainerPerformance } from "@/lib/data/reports";
 import { trainers } from "@/lib/data/trainers";
+import { gymClasses } from "@/lib/data/classes";
+import { classBookings } from "@/lib/data/class-bookings";
 import { formatCurrency } from "@/lib/utils-data";
+import { percentTrend, getClassUtilization, LOW_UTILIZATION_THRESHOLD, HIGH_UTILIZATION_THRESHOLD } from "@/lib/reports-helpers";
 
-type TabValue = "revenue" | "members" | "attendance" | "classes" | "trainers" | "retention";
+type TabValue = "overview" | "revenue" | "members" | "attendance" | "classes" | "trainers" | "retention";
 
 export function ReportsPageClient() {
   const searchParams = useSearchParams();
-  const initialTab = (searchParams.get("tab") as TabValue) ?? "revenue";
+  const initialTab = (searchParams.get("tab") as TabValue) ?? "overview";
   const [tab, setTab] = React.useState<TabValue>(initialTab);
 
   const monthlyRevenue = revenueByMonth[revenueByMonth.length - 1].revenue;
+  const prevMonthlyRevenue = revenueByMonth[revenueByMonth.length - 2].revenue;
   const activeMembers = members.filter((m) => m.status === "active").length;
   const totalChurned = memberGrowth.reduce((s, m) => s + m.churned, 0);
-  const totalNew = memberGrowth.reduce((s, m) => s + m.newMembers, 0);
   const avgRetention = Math.round(
     retentionByCohort.reduce((s, c) => s + c.month3, 0) / retentionByCohort.length
   );
+
+  const thisMonthGrowth = memberGrowth[memberGrowth.length - 1];
+  const lastMonthGrowth = memberGrowth[memberGrowth.length - 2];
+
+  const utilization = getClassUtilization(gymClasses);
+  const lowUtilClasses = utilization.filter((c) => c.utilization < LOW_UTILIZATION_THRESHOLD);
+  const highUtilClasses = utilization.filter((c) => c.utilization >= HIGH_UTILIZATION_THRESHOLD);
+  const totalBookingAttempts = classBookings.length;
+  const cancelledOrNoShow = classBookings.filter((b) => b.status === "cancelled" || b.status === "no-show").length;
+  const cancellationRate = totalBookingAttempts > 0 ? Math.round((cancelledOrNoShow / totalBookingAttempts) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -44,6 +60,7 @@ export function ReportsPageClient() {
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
         <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="revenue">Revenue</TabsTrigger>
           <TabsTrigger value="members">Members</TabsTrigger>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
@@ -52,14 +69,37 @@ export function ReportsPageClient() {
           <TabsTrigger value="retention">Retention</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="overview">
+          <ReportsOverviewTab />
+        </TabsContent>
+
         <TabsContent value="revenue" className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard label="Monthly Revenue" value={formatCurrency(monthlyRevenue)} icon={Wallet} trend={{ value: "+5.1%", direction: "up" }} helpText="vs last month" />
+            <StatCard
+              label="Monthly Revenue"
+              value={formatCurrency(monthlyRevenue)}
+              icon={Wallet}
+              trend={percentTrend(monthlyRevenue, prevMonthlyRevenue)}
+              helpText="vs last month"
+            />
             <StatCard label="Avg Revenue / Member" value={formatCurrency(Math.round(monthlyRevenue / activeMembers))} icon={TrendingUp} helpText="this month" />
             <StatCard label="Top Plan" value={revenueByPlan[0].plan} icon={Users} helpText={`${revenueByPlan[0].value}% of revenue`} />
           </div>
           <Card>
-            <CardHeader><CardTitle>Revenue trend</CardTitle><CardDescription>Last 6 months — answers: is revenue growing?</CardDescription></CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Revenue trend</CardTitle>
+                <CardDescription>Last 6 months — answers: is revenue growing?</CardDescription>
+              </div>
+              <CardAction>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/owner/payments?tab=transactions">
+                    View transactions
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
             <CardContent><RevenueChart /></CardContent>
           </Card>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -91,15 +131,37 @@ export function ReportsPageClient() {
         <TabsContent value="members" className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard label="Active Members" value={activeMembers.toString()} icon={Users} />
-            <StatCard label="New This Period" value={totalNew.toString()} icon={TrendingUp} helpText="last 6 months" />
-            <StatCard label="Churned" value={totalChurned.toString()} icon={UserMinus} helpText="last 6 months" />
+            <StatCard
+              label="New This Month"
+              value={thisMonthGrowth.newMembers.toString()}
+              icon={TrendingUp}
+              trend={percentTrend(thisMonthGrowth.newMembers, lastMonthGrowth.newMembers)}
+              helpText="vs last month"
+            />
+            <StatCard
+              label="Churned This Month"
+              value={thisMonthGrowth.churned.toString()}
+              icon={UserMinus}
+              trend={percentTrend(thisMonthGrowth.churned, lastMonthGrowth.churned, { invert: true })}
+              helpText="vs last month"
+            />
           </div>
           <Card>
             <CardHeader><CardTitle>New vs. churned members</CardTitle><CardDescription>Answers: are we growing faster than we&apos;re losing members?</CardDescription></CardHeader>
             <CardContent><MemberGrowthChart /></CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle>Membership status breakdown</CardTitle></CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardTitle>Membership status breakdown</CardTitle>
+              <CardAction>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/owner/members">
+                    View members
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
             <CardContent>
               <MembershipDistributionChart
                 data={[
@@ -116,7 +178,20 @@ export function ReportsPageClient() {
 
         <TabsContent value="attendance" className="space-y-4">
           <Card>
-            <CardHeader><CardTitle>Weekly attendance</CardTitle><CardDescription>Answers: which days need more staff on the floor?</CardDescription></CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Weekly attendance</CardTitle>
+                <CardDescription>Answers: which days need more staff on the floor?</CardDescription>
+              </div>
+              <CardAction>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/owner/attendance?tab=history">
+                    View log
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
             <CardContent><WeeklyAttendanceChart /></CardContent>
           </Card>
           <Card>
@@ -126,8 +201,26 @@ export function ReportsPageClient() {
         </TabsContent>
 
         <TabsContent value="classes" className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <StatCard label="Classes Running Low" value={lowUtilClasses.length.toString()} icon={AlertTriangle} helpText={`under ${LOW_UTILIZATION_THRESHOLD}% capacity`} />
+            <StatCard label="Classes Near Capacity" value={highUtilClasses.length.toString()} icon={Users} helpText={`${HIGH_UTILIZATION_THRESHOLD}%+ capacity`} />
+            <StatCard label="Cancellation / No-show Rate" value={`${cancellationRate}%`} icon={UserMinus} helpText="of all class bookings" />
+          </div>
           <Card>
-            <CardHeader><CardTitle>Class performance</CardTitle><CardDescription>Answers: which classes are worth keeping — and which aren&apos;t?</CardDescription></CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Class performance</CardTitle>
+                <CardDescription>Answers: which classes are worth keeping — and which aren&apos;t?</CardDescription>
+              </div>
+              <CardAction>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/owner/classes?tab=classes">
+                    View schedule
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
             <CardContent className="space-y-4">
               {classPerformance.map((c) => (
                 <div key={c.className}>
@@ -135,6 +228,9 @@ export function ReportsPageClient() {
                     <div>
                       <span className="font-medium text-foreground">{c.className}</span>
                       <Badge variant="outline" className="ml-2">{c.type}</Badge>
+                      {c.avgAttendance < LOW_UTILIZATION_THRESHOLD && (
+                        <Badge variant="warning" className="ml-2">Low turnout</Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-muted-foreground">
                       <span className="flex items-center gap-1"><Star className="size-3.5 fill-brand-lime text-brand-lime" />{c.rating}</span>
@@ -192,6 +288,12 @@ export function ReportsPageClient() {
               </table>
             </div>
           </Card>
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/owner/staff">
+              View trainers &amp; staff
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
         </TabsContent>
 
         <TabsContent value="retention" className="space-y-4">
@@ -225,7 +327,20 @@ export function ReportsPageClient() {
             </CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle>Why members leave</CardTitle><CardDescription>Answers: what should we fix to reduce churn?</CardDescription></CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Why members leave</CardTitle>
+                <CardDescription>Answers: what should we fix to reduce churn?</CardDescription>
+              </div>
+              <CardAction>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/owner/members?tab=expired">
+                    View expired members
+                    <ArrowRight className="size-4" />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
             <CardContent className="space-y-3">
               {churnReasons.map((r) => (
                 <div key={r.reason}>
