@@ -8,6 +8,7 @@ const columns = [
     title: "Explore",
     links: [
       { label: "Facilities", href: "/#facilities" },
+      { label: "Gallery", href: "/#gallery" },
       { label: "Membership Plans", href: "/plans" },
       { label: "Classes", href: "/classes" },
       { label: "Trainers", href: "/trainers" },

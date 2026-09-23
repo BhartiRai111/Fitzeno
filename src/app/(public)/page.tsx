@@ -2,6 +2,7 @@ import { Hero } from "@/components/public/sections/hero";
 import { StatsBar } from "@/components/public/sections/stats-bar";
 import { About } from "@/components/public/sections/about";
 import { Facilities } from "@/components/public/sections/facilities";
+import { Gallery } from "@/components/public/sections/gallery";
 import { PlansTeaser } from "@/components/public/sections/plans-teaser";
 import { ClassesTeaser } from "@/components/public/sections/classes-teaser";
 import { TrainersTeaser } from "@/components/public/sections/trainers-teaser";
@@ -17,6 +18,7 @@ export default function HomePage() {
       <StatsBar />
       <About />
       <Facilities />
+      <Gallery />
       <PlansTeaser />
       <ClassesTeaser />
       <TrainersTeaser />

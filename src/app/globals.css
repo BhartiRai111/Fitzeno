@@ -160,6 +160,20 @@
 
   --color-brand-lime: var(--brand-lime-500);
   --color-brand-lime-hover: var(--brand-lime-600);
+  --color-brand-lime-400: var(--brand-lime-400);
+  --color-brand-lime-500: var(--brand-lime-500);
+  --color-brand-lime-600: var(--brand-lime-600);
+
+  --color-brand-indigo-50: var(--brand-indigo-50);
+  --color-brand-indigo-100: var(--brand-indigo-100);
+  --color-brand-indigo-200: var(--brand-indigo-200);
+  --color-brand-indigo-300: var(--brand-indigo-300);
+  --color-brand-indigo-400: var(--brand-indigo-400);
+  --color-brand-indigo-500: var(--brand-indigo-500);
+  --color-brand-indigo-600: var(--brand-indigo-600);
+  --color-brand-indigo-700: var(--brand-indigo-700);
+  --color-brand-indigo-800: var(--brand-indigo-800);
+  --color-brand-indigo-900: var(--brand-indigo-900);
 
   --radius-sm: calc(var(--radius) - 8px);
   --radius-md: calc(var(--radius) - 4px);
