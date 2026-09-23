@@ -16,6 +16,7 @@ import {
   Bell,
   UserCircle,
   CalendarClock,
+  ShoppingBag,
 } from "lucide-react";
 
 export interface NavItem {
@@ -47,6 +48,7 @@ export const ownerNavSections: NavSection[] = [
       { label: "Memberships", href: "/owner/memberships", icon: CreditCard },
       { label: "Classes & Schedule", href: "/owner/classes", icon: CalendarDays },
       { label: "Attendance", href: "/owner/attendance", icon: ClipboardCheck },
+      { label: "Store", href: "/owner/store", icon: ShoppingBag },
     ],
   },
   {

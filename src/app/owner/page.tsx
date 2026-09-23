@@ -8,6 +8,7 @@ import {
   CalendarClock,
   TrendingUp,
   Plus,
+  ShoppingBag,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
@@ -40,6 +41,8 @@ import { payments, revenueByMonth } from "@/lib/data/payments";
 import { gymClasses } from "@/lib/data/classes";
 import { attendanceRecords, weeklyAttendance } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
+import { products } from "@/lib/data/products";
+import { getLowStockProducts } from "@/lib/store-helpers";
 import { recentActivity } from "@/lib/data/activity";
 import { formatCurrency, formatDate, daysBetween } from "@/lib/utils-data";
 import { percentTrend } from "@/lib/reports-helpers";
@@ -83,6 +86,7 @@ export default function OwnerOverviewPage() {
   const leadsNeedingFollowUp = leads.filter(
     (l) => l.nextFollowUp && l.nextFollowUp <= TODAY && l.status !== "converted" && l.status !== "lost"
   );
+  const lowStockProducts = getLowStockProducts(products);
 
   const rawAlerts: AlertItem[] = [
     {
@@ -121,6 +125,12 @@ export default function OwnerOverviewPage() {
       message: `${leadsNeedingFollowUp.length} leads require follow-up`,
       href: "/owner/leads?tab=all",
     },
+    {
+      id: "a7",
+      severity: "medium",
+      message: `${lowStockProducts.length} store products need restocking`,
+      href: "/owner/store?tab=inventory",
+    },
   ];
   const alerts = rawAlerts.filter((a) => !a.message.startsWith("0"));
 
@@ -154,6 +164,12 @@ export default function OwnerOverviewPage() {
                 <Link href="/owner/payments">
                   <Wallet />
                   Record Payment
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/owner/store?tab=pos">
+                  <ShoppingBag />
+                  New Sale
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>

@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { MembershipStatus, LeadStatus, PaymentStatus, BookingStatus, StaffStatus } from "@/lib/data/types";
+import type { MembershipStatus, LeadStatus, PaymentStatus, BookingStatus, StaffStatus, StockStatus, SaleStatus } from "@/lib/data/types";
 
 const membershipConfig: Record<MembershipStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
   active: { label: "Active", variant: "success" },
@@ -71,6 +71,36 @@ const staffConfig: Record<StaffStatus, { label: string; variant: "success" | "wa
 
 export function StaffStatusBadge({ status }: { status: StaffStatus }) {
   const config = staffConfig[status];
+  return (
+    <Badge variant={config.variant} dot>
+      {config.label}
+    </Badge>
+  );
+}
+
+const stockConfig: Record<StockStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  "in-stock": { label: "In Stock", variant: "success" },
+  "low-stock": { label: "Low Stock", variant: "warning" },
+  "out-of-stock": { label: "Out of Stock", variant: "danger" },
+};
+
+export function StockStatusBadge({ status }: { status: StockStatus }) {
+  const config = stockConfig[status];
+  return (
+    <Badge variant={config.variant} dot>
+      {config.label}
+    </Badge>
+  );
+}
+
+const saleConfig: Record<SaleStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
+  completed: { label: "Completed", variant: "success" },
+  refunded: { label: "Refunded", variant: "info" },
+  cancelled: { label: "Cancelled", variant: "default" },
+};
+
+export function SaleStatusBadge({ status }: { status: SaleStatus }) {
+  const config = saleConfig[status];
   return (
     <Badge variant={config.variant} dot>
       {config.label}

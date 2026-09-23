@@ -17,6 +17,7 @@ import {
   UserRound,
   CreditCard,
   CalendarCheck,
+  ShoppingBag,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
@@ -29,6 +30,7 @@ import {
   MembershipStatusBadge,
   PaymentStatusBadge,
   BookingStatusBadge,
+  SaleStatusBadge,
 } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { EditMemberDialog } from "@/components/dashboard/dialogs/edit-member-dialog";
@@ -40,6 +42,7 @@ import { attendanceRecords } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
 import { gymClasses } from "@/lib/data/classes";
 import { ptSessions } from "@/lib/data/pt-sessions";
+import { storeSales } from "@/lib/data/store-sales";
 import { getPlanByName, computeNextExpiry } from "@/lib/membership-helpers";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
 
@@ -69,6 +72,7 @@ export default function MemberDetailPage() {
   const memberAttendance = attendanceRecords.filter((a) => a.memberId === member.id);
   const memberBookings = classBookings.filter((b) => b.memberName === member.name);
   const memberPt = ptSessions.filter((s) => s.memberName === member.name);
+  const memberPurchases = storeSales.filter((s) => s.memberId === member.id);
 
   function addNote() {
     if (!noteDraft.trim()) return;
@@ -217,6 +221,7 @@ export default function MemberDetailPage() {
                 <TabsTrigger value="payments">Payments</TabsTrigger>
                 <TabsTrigger value="attendance">Attendance</TabsTrigger>
                 <TabsTrigger value="bookings">Bookings</TabsTrigger>
+                <TabsTrigger value="purchases">Purchases</TabsTrigger>
                 <TabsTrigger value="notes">Notes</TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -286,6 +291,29 @@ export default function MemberDetailPage() {
                           <p className="text-xs text-muted-foreground">{formatDate(s.date)} · {s.startTime}</p>
                         </div>
                         <BookingStatusBadge status={s.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="purchases">
+                {memberPurchases.length === 0 ? (
+                  <EmptyState icon={ShoppingBag} title="No store purchases yet" description="Items bought at the front desk will show up here." />
+                ) : (
+                  <div className="space-y-1">
+                    {memberPurchases.map((sale) => (
+                      <div key={sale.id} className="flex items-center justify-between rounded-md px-2 py-2.5 hover:bg-muted/40">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            {sale.items.map((i) => i.name).join(", ")}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{formatDate(sale.date)} · {sale.paymentMethod} · {sale.orderNumber}</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="tabular text-sm font-medium text-foreground">{formatCurrency(sale.total)}</span>
+                          <SaleStatusBadge status={sale.status} />
+                        </div>
                       </div>
                     ))}
                   </div>

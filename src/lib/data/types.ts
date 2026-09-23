@@ -32,6 +32,7 @@ export type PermissionArea =
   | "attendance"
   | "memberships"
   | "payments"
+  | "store"
   | "reports"
   | "staff"
   | "announcements"
@@ -161,7 +162,8 @@ export type NotificationCategory =
   | "staff"
   | "announcement"
   | "promotion"
-  | "system";
+  | "system"
+  | "inventory";
 
 export type NotificationPriority = "high" | "medium" | "low";
 
@@ -268,4 +270,75 @@ export interface AlertItem {
   severity: "high" | "medium" | "low";
   message: string;
   href: string;
+}
+
+// ---------------------------------------------------------------------------
+// Store / POS / Inventory
+// ---------------------------------------------------------------------------
+
+export type ProductCategory = "Supplements" | "Hydration" | "Apparel" | "Accessories" | "Equipment";
+export type StockStatus = "in-stock" | "low-stock" | "out-of-stock";
+export type SaleStatus = "completed" | "refunded" | "cancelled";
+export type InventoryMovementType = "restock" | "sale" | "return" | "damaged" | "adjustment";
+
+export interface Supplier {
+  id: string;
+  name: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  leadTimeDays: number;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  sku: string;
+  category: ProductCategory;
+  description: string;
+  price: number;
+  cost: number;
+  stock: number;
+  lowStockThreshold: number;
+  supplierId?: string;
+  /** Whether this product is currently sold — discontinued/hidden products stay false. */
+  active: boolean;
+  createdOn: string;
+}
+
+export interface InventoryMovement {
+  id: string;
+  productId: string;
+  type: InventoryMovementType;
+  /** Positive for stock added (restock/return), negative for stock removed (sale/damaged), signed for adjustment. */
+  quantity: number;
+  date: string;
+  note: string;
+  reference?: string;
+}
+
+export interface StoreSaleItem {
+  productId: string;
+  name: string;
+  unitPrice: number;
+  quantity: number;
+}
+
+export interface StoreSale {
+  id: string;
+  orderNumber: string;
+  items: StoreSaleItem[];
+  subtotal: number;
+  discountPercent: number;
+  discountAmount: number;
+  /** VAT portion already included within `total` — informational, not added on top. */
+  tax: number;
+  total: number;
+  paymentMethod: "Card" | "UPI" | "Cash" | "Bank Transfer";
+  status: SaleStatus;
+  memberId?: string;
+  memberName?: string;
+  soldBy: string;
+  date: string;
+  time: string;
 }
