@@ -1,0 +1,23 @@
+node_modules
+dist
+coverage
+
+# Keep environment variables out of version control. The root .gitignore's
+# broad `.env*` rule also catches .env.example, so un-ignore that one
+# explicitly — it's a template with no real secrets, meant to be committed.
+.env
+!.env.example
+
+# Generated Prisma client — regenerated from prisma/schema.prisma via
+# `npm run prisma:generate` (and automatically by migrate dev).
+/src/generated/prisma
+
+# Agent skill docs Prisma's CLI installs on `prisma init` — genuinely useful
+# locally while working with an unfamiliar Prisma major version, but they're
+# vendored tool documentation, not project source, so they don't belong in
+# version control. Re-fetch anytime with `prisma init` (safe to re-run) if
+# you clear a local checkout and want them back.
+.claude/skills
+.windsurf/skills
+.agents/skills
+skills-lock.json

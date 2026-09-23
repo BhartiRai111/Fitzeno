@@ -1,0 +1,94 @@
+// Fitzeno backend — Prisma schema
+//
+// This phase establishes only the foundation-level schema: the tenant
+// (business/gym) boundary and the user/identity model every future business
+// module (members, staff, classes, payments, ...) will hang off of.
+//
+// Conventions used throughout this schema, for every future model to follow:
+//   - `id` is a UUID (`@default(uuid())`), never an auto-increment integer,
+//     so IDs are safe to generate client-side and never leak row counts.
+//   - `createdAt` / `updatedAt` timestamps on every table.
+//   - `deletedAt` nullable timestamp for soft deletion on records an owner
+//     might restore (never hard-delete business/financial history).
+//   - Tenant-scoped tables carry a `tenantId` foreign key + index so every
+//     query can (and, once query middleware lands, must) filter by tenant.
+//   - snake_case column/table names in the database via @@map / @map, camelCase
+//     in the generated client — keeps SQL idiomatic while TS stays idiomatic.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Tenant — one row per gym/business using the platform. Every tenant-owned
+// table below carries a tenantId so one gym's data is never reachable from
+// another's request context (enforced in application code by a tenant guard
+// in a later phase; the column + index is the schema-level half of that).
+// ---------------------------------------------------------------------------
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  /// URL-safe unique handle, e.g. for a future custom subdomain or public slug.
+  slug      String    @unique
+  timezone  String    @default("Europe/London")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  users User[]
+
+  @@map("tenants")
+}
+
+/// Mirrors the frontend's StaffAccessRole ("owner" | "manager" | "trainer" |
+/// "front-desk") plus MEMBER for member-portal accounts, which the frontend
+/// currently models separately (Member) but will need a login identity for
+/// once the Member Portal is wired to real auth.
+enum UserRole {
+  OWNER
+  MANAGER
+  FRONT_DESK
+  TRAINER
+  MEMBER
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  INACTIVE
+
+  @@map("user_status")
+}
+
+// ---------------------------------------------------------------------------
+// User — the login identity for every human in the system (owner, staff,
+// trainer, or member). Business-specific profile fields (bio, specialties,
+// membership plan, etc.) belong to their own domain tables in later phases,
+// which will each hold a one-to-one FK back to the User that owns them.
+// ---------------------------------------------------------------------------
+model User {
+  id           String     @id @default(uuid())
+  tenantId     String     @map("tenant_id")
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  firstName    String     @map("first_name")
+  lastName     String     @map("last_name")
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  deletedAt    DateTime?  @map("deleted_at")
+
+  @@index([tenantId])
+  @@index([tenantId, role])
+  @@map("users")
+}

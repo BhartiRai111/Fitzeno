@@ -1,8 +1,13 @@
 # Fitzeno
 
-A premium, production-style gym management platform — public marketing site, member portal, and owner dashboard, built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui-style components on Radix primitives.
+A premium, production-style gym management platform — public marketing site, member portal, and owner dashboard, built with Next.js, TypeScript, Tailwind CSS, and shadcn/ui-style components on Radix primitives, backed by a NestJS + PostgreSQL API.
 
-## Stack
+This repository holds both halves of the product:
+
+- **`/`** (this directory) — the Next.js frontend, detailed below.
+- **`backend/`** — the NestJS API. See [`backend/README.md`](backend/README.md) for its own setup, environment variables, and architecture notes. The two are independent projects (separate `package.json`, separate `npm install`) that happen to live in one repo.
+
+## Frontend stack
 
 - **Framework:** Next.js 16 (App Router, Turbopack)
 - **Language:** TypeScript
@@ -25,7 +30,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - `/owner` — owner/admin dashboard
 - `/portal` — member portal
 
-The backend is not connected yet — all data is realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly.
+The backend (`backend/`) is not wired into these pages yet — the frontend still runs entirely on the realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly. See `backend/README.md` for the current state of the API: the database/config/validation/security foundation is in place, but no business endpoints (members, classes, payments, ...) exist yet, so there's nothing to point this frontend at until a later phase.
 
 ## Project structure
 
@@ -44,9 +49,13 @@ src/
     portal/       member portal components
     brand/        logo and brand mark
   lib/data/        typed mock data (members, leads, payments, classes, ...)
+
+backend/           NestJS API — see backend/README.md
 ```
 
 ## Scripts
+
+These run against the frontend (`package.json` in this directory) — the backend has its own scripts, documented in `backend/README.md`.
 
 - `npm run dev` — start the dev server
 - `npm run build` — production build
