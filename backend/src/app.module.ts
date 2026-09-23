@@ -21,6 +21,10 @@ import { PermissionsGuard } from './authz/permissions.guard.js';
 import { TenantsModule } from './tenants/tenants.module.js';
 import { MembersModule } from './members/members.module.js';
 import { LeadsModule } from './leads/leads.module.js';
+import { TrainersModule } from './trainers/trainers.module.js';
+import { ClassesModule } from './classes/classes.module.js';
+import { ClassBookingsModule } from './class-bookings/class-bookings.module.js';
+import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
 
 @Module({
   imports: [
@@ -47,6 +51,10 @@ import { LeadsModule } from './leads/leads.module.js';
     TenantsModule,
     MembersModule,
     LeadsModule,
+    TrainersModule,
+    ClassesModule,
+    ClassBookingsModule,
+    PtSessionsModule,
     HealthModule,
   ],
   providers: [

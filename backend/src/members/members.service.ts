@@ -265,4 +265,30 @@ export class MembersService {
       throw new NotFoundException('Member not found.');
     }
   }
+
+  /**
+   * Plain tenant-scoped Member row lookup, for the Classes/Bookings/PT
+   * modules to validate a memberId (existence, tenant, and
+   * eligibility-proxy status) without importing the full response-shaping
+   * machinery above — mirrors the "read a sibling module's table directly
+   * via PrismaService" precedent already used elsewhere in this backend,
+   * kept here instead since Member's own uniqueness/tenant rules belong
+   * with MembersService.
+   */
+  async getMemberInTenant(tenantId: string, memberId: string): Promise<Member> {
+    const member = await this.prisma.member.findFirst({ where: { id: memberId, tenantId } });
+    if (!member) {
+      throw new NotFoundException('Member not found.');
+    }
+    return member;
+  }
+
+  /** Resolves the caller's own memberId from their userId — the booking self-endpoints' entry point. */
+  async getOwnMemberId(tenantId: string, userId: string): Promise<string> {
+    const member = await this.prisma.member.findFirst({ where: { tenantId, userId }, select: { id: true } });
+    if (!member) {
+      throw new NotFoundException("You don't have a member profile yet.");
+    }
+    return member.id;
+  }
 }

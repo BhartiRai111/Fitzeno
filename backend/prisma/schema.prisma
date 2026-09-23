@@ -77,14 +77,14 @@ model Tenant {
   /// approved frontend's mock data for the shape this mirrors.
   tagline     String?
   description String?
-  logoUrl     String?  @map("logo_url")
+  logoUrl     String? @map("logo_url")
   phone       String?
   email       String?
   website     String?
-  addressLine String?  @map("address_line")
+  addressLine String? @map("address_line")
   city        String?
   region      String?
-  postalCode  String?  @map("postal_code")
+  postalCode  String? @map("postal_code")
   country     String?
 
   timezone String @default("Europe/London")
@@ -95,10 +95,14 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users    User[]
-  settings TenantSettings?
-  members  Member[]
-  leads    Lead[]
+  users         User[]
+  settings      TenantSettings?
+  members       Member[]
+  leads         Lead[]
+  trainers      Trainer[]
+  classSeries   ClassSeries[]
+  classBookings ClassBooking[]
+  ptSessions    PersonalTrainingSession[]
 
   @@map("tenants")
 }
@@ -123,13 +127,13 @@ model TenantSettings {
 
   /// [{ day: string, time: string }, ...] — matches the Settings > Business
   /// Hours tab exactly (free-text time range per day/day-group).
-  businessHours Json @default("[]") @map("business_hours")
+  businessHours           Json @default("[]") @map("business_hours")
   /// { freezesPerYear, maxFreezeDurationDays, cancellationNoticeDays,
   ///   renewalReminderDaysBefore: number[] } — membership policy defaults
   /// the future Memberships module will read, not a memberships table.
-  membershipPolicy Json @default("{}") @map("membership_policy")
+  membershipPolicy        Json @default("{}") @map("membership_policy")
   /// { card, upi, cash, bankTransfer: boolean } — accepted payment methods.
-  paymentMethods Json @default("{}") @map("payment_methods")
+  paymentMethods          Json @default("{}") @map("payment_methods")
   /// { member: {...}, staff: {...} } — platform-wide communication-channel
   /// toggles (per-user notification preferences are a separate concern).
   notificationPreferences Json @default("{}") @map("notification_preferences")
@@ -203,6 +207,14 @@ model User {
   memberNotesAuthored MemberNote[]
   leadNotesAuthored   LeadNote[]
 
+  /// The Trainer coaching profile linked to this login, if this user has
+  /// one — see Trainer's own comment for why the link is optional and
+  /// never auto-created.
+  trainerProfile         Trainer?                  @relation("TrainerProfile")
+  classSeriesTaught      ClassSeries[]             @relation("ClassTrainer")
+  classOccurrencesTaught ClassOccurrence[]         @relation("ClassOccurrenceTrainer")
+  ptSessionsTaught       PersonalTrainingSession[] @relation("PtSessionTrainer")
+
   @@index([tenantId])
   @@index([tenantId, role])
   @@map("users")
@@ -265,20 +277,20 @@ model PermissionOverride {
 // never be able to reconstruct a credential).
 // ---------------------------------------------------------------------------
 model RefreshToken {
-  id        String    @id @default(uuid())
-  userId    String    @map("user_id")
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique @map("token_hash")
-  expiresAt DateTime  @map("expires_at")
-  revokedAt DateTime? @map("revoked_at")
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash           String    @unique @map("token_hash")
+  expiresAt           DateTime  @map("expires_at")
+  revokedAt           DateTime? @map("revoked_at")
   /// Set when this token was replaced by a newer one on refresh (token
   /// rotation) — distinct from revokedAt so "used to refresh, superseded"
   /// reads differently in an audit trail than "explicitly logged out" or
   /// "reused after rotation, treated as compromised."
-  replacedByTokenHash String? @map("replaced_by_token_hash")
-  userAgent           String? @map("user_agent")
-  ipAddress           String? @map("ip_address")
-  createdAt           DateTime @default(now()) @map("created_at")
+  replacedByTokenHash String?   @map("replaced_by_token_hash")
+  userAgent           String?   @map("user_agent")
+  ipAddress           String?   @map("ip_address")
+  createdAt           DateTime  @default(now()) @map("created_at")
 
   @@index([userId])
   @@map("refresh_tokens")
@@ -362,11 +374,11 @@ model Member {
   phone     String?
 
   /// Free text, not a closed enum — a member's own words, not a system state.
-  gender                 String?
-  dateOfBirth             DateTime? @map("date_of_birth")
-  addressLine             String?   @map("address_line")
-  emergencyContactName    String?   @map("emergency_contact_name")
-  emergencyContactPhone   String?   @map("emergency_contact_phone")
+  gender                String?
+  dateOfBirth           DateTime? @map("date_of_birth")
+  addressLine           String?   @map("address_line")
+  emergencyContactName  String?   @map("emergency_contact_name")
+  emergencyContactPhone String?   @map("emergency_contact_phone")
 
   status   MemberStatus @default(ACTIVE)
   /// Member-since date — distinct from createdAt, which is when this ROW was
@@ -388,7 +400,9 @@ model Member {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  notes MemberNote[]
+  notes         MemberNote[]
+  classBookings ClassBooking[]
+  ptSessions    PersonalTrainingSession[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -532,4 +546,356 @@ model LeadNote {
 
   @@index([leadId])
   @@map("lead_notes")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Trainers, Classes, Scheduling, Bookings, Waitlist & Personal
+// Training. Builds on the identity (User) and tenant layers above; carries
+// no Attendance/Payments/Notifications tables of its own — see each model's
+// comment for the specific integration points left for those later phases.
+//
+// Recurring-class model: a two-table split. ClassSeries is the recurring
+// TEMPLATE an owner/manager authors once (day of week, time, trainer,
+// capacity, location); ClassOccurrence rows are the actual dated instances
+// members book. Occurrences are generated lazily (on read, by
+// ClassesService.ensureOccurrencesGenerated) for a rolling horizon rather
+// than by a cron job or generated exhaustively up front — idempotent via
+// the (classSeriesId, date) unique constraint, so re-running generation for
+// an already-covered date is a no-op. A "one-off" class is simply a
+// ClassSeries whose endDate equals its startDate (generates exactly one
+// occurrence) — no separate model or recurrence-type enum needed for that.
+//
+// Booking concurrency: capacity/waitlist accounting (ClassBookingsService)
+// runs inside a Prisma Serializable-isolation transaction with a bounded
+// retry on write-conflict (P2034), rather than raw SQL row locking — the
+// simpler, still-correct option for this scale.
+//
+// Booking-row reuse: ClassBooking has one unique row per
+// (classOccurrenceId, memberId) — cancelling and later rebooking the same
+// occurrence REUSES that row (status transitions CANCELLED -> CONFIRMED /
+// WAITLISTED) rather than inserting a new one, since Prisma's schema DSL
+// can't express a partial unique index that would otherwise be needed to
+// allow multiple CANCELLED rows alongside one active one.
+// ---------------------------------------------------------------------------
+
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+  SUN
+
+  @@map("day_of_week")
+}
+
+/// ACTIVE — coaching, bookable for classes/PT.
+/// INACTIVE — a TRAINER-role user who's temporarily not taking new
+///   classes/PT bookings (e.g. on leave); distinct from the User itself
+///   being disabled — see the model comment.
+enum TrainerStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("trainer_status")
+}
+
+// ---------------------------------------------------------------------------
+// Trainer — the coaching profile for a User whose role is TRAINER: exactly
+// the "business-specific profile data" pattern User's own header comment
+// describes (bio, specialties, certifications, PT availability), kept off
+// User itself so identity/login stays separate from coaching-specific
+// fields no other role needs. One-to-one and required — a Trainer row
+// cannot exist without a backing User, and is never auto-created (no
+// implicit side effect on a User's role changing to TRAINER, unlike the
+// Member portal auto-link precedent in AuthService.register — an owner
+// explicitly opts a staff member into coaching via POST /trainers).
+// ---------------------------------------------------------------------------
+model Trainer {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Must reference a User with role = TRAINER in this tenant — enforced in
+  /// TrainersService, not the DB (mirrors Member.trainerId's own approach).
+  userId String @unique @map("user_id")
+  user   User   @relation("TrainerProfile", fields: [userId], references: [id], onDelete: Cascade)
+
+  bio                    String?
+  /// Free text tags (e.g. "Powerlifting", "Yoga") — an open set, matching
+  /// how the approved frontend treats specialties; not a closed enum.
+  specialties            String[]
+  certifications         String[]
+  yearsExperience        Int?          @map("years_experience")
+  status                 TrainerStatus @default(ACTIVE)
+  /// Whether this trainer can be booked for 1:1 Personal Training sessions
+  /// at all, independent of whether they currently have any availability
+  /// windows set — lets an owner temporarily hide a trainer from PT
+  /// discovery without deleting their availability data.
+  offersPersonalTraining Boolean       @default(true) @map("offers_personal_training")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  availability TrainerAvailability[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("trainers")
+}
+
+// ---------------------------------------------------------------------------
+// TrainerAvailability — recurring weekly windows in which a trainer can be
+// booked for Personal Training (mirrors the approved frontend's
+// TrainerAvailabilitySlot / "Availability" page 1:1: members only see PT
+// slots inside these windows that don't clash with a class the trainer
+// teaches or a session they already have booked — see
+// PtSessionsService.getAvailableSlots). Deliberately NOT used to gate class
+// assignment — a trainer's classes are scheduled directly on ClassSeries;
+// this table only governs 1:1 PT bookability, matching the approved UI's
+// own framing ("Set the hours members can book personal training sessions
+// with you").
+// ---------------------------------------------------------------------------
+model TrainerAvailability {
+  id        String    @id @default(uuid())
+  trainerId String    @map("trainer_id")
+  trainer   Trainer   @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  dayOfWeek DayOfWeek @map("day_of_week")
+  /// "HH:mm", 24-hour, trainer's local gym time — matches every other
+  /// time-of-day field in this phase (ClassSeries/ClassOccurrence).
+  startTime String    @map("start_time")
+  endTime   String    @map("end_time")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([trainerId, dayOfWeek])
+  @@map("trainer_availability")
+}
+
+/// ACTIVE — currently running, generating future occurrences.
+/// CANCELLED — the whole recurring class has been withdrawn (distinct from
+///   cancelling a single ClassOccurrence): no further occurrences are
+///   generated past the cancellation, and any already-generated future
+///   SCHEDULED occurrences are cancelled along with it — see
+///   ClassesService.cancelSeries.
+enum ClassSeriesStatus {
+  ACTIVE
+  CANCELLED
+
+  @@map("class_series_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassSeries — the recurring class TEMPLATE an owner/manager authors
+// (name/category/trainer/day-of-week/time/capacity/location). See the
+// phase-level comment above for why occurrences are a separate table
+// generated lazily rather than this table being booked directly.
+// ---------------------------------------------------------------------------
+model ClassSeries {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  /// Free text (e.g. "HIIT", "Yoga", "Spin") — an open set members/owners
+  /// can extend, not a closed enum; matches the Trainer.specialties choice.
+  category    String
+  description String?
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("ClassTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+
+  dayOfWeek       DayOfWeek @map("day_of_week")
+  startTime       String    @map("start_time")
+  /// Minutes — the frontend's own GymClass.duration field, kept as the
+  /// source of truth for a session's length rather than storing endTime
+  /// twice (endTime is derived, e.g. for conflict-window checks).
+  durationMinutes Int       @map("duration_minutes")
+
+  capacity Int
+  location String
+
+  status ClassSeriesStatus @default(ACTIVE)
+
+  /// The date this recurrence begins (inclusive) — occurrences are never
+  /// generated before it even if it falls on the matching dayOfWeek.
+  startDate DateTime  @map("start_date")
+  /// Inclusive end date, or null for an open-ended recurring class. A
+  /// one-off class sets this equal to startDate.
+  endDate   DateTime? @map("end_date")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  occurrences ClassOccurrence[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, trainerId])
+  @@map("class_series")
+}
+
+/// SCHEDULED — normal, bookable (subject to capacity/date rules).
+/// CANCELLED — this specific date was called off (trainer sick, holiday,
+///   etc.) without cancelling the whole recurring series; existing
+///   bookings are cancelled along with it — see ClassesService.cancelOccurrence.
+/// COMPLETED — reserved for the later Attendance phase to mark once a
+///   session's actual roster has been taken; nothing in this phase sets it.
+enum ClassOccurrenceStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+
+  @@map("class_occurrence_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassOccurrence — one dated, actually-bookable instance of a ClassSeries.
+// trainerId/location/capacity are copied from the series at generation time
+// but can be overridden per-occurrence (a substitute trainer covering one
+// session, a one-off room change) without touching the template. tenantId
+// is denormalized from the series purely so every tenant-scoped query here
+// (list/find) can filter directly without an extra join, matching this
+// schema's existing convention of every tenant-owned table carrying its own
+// tenantId column.
+// ---------------------------------------------------------------------------
+model ClassOccurrence {
+  id            String      @id @default(uuid())
+  tenantId      String      @map("tenant_id")
+  classSeriesId String      @map("class_series_id")
+  classSeries   ClassSeries @relation(fields: [classSeriesId], references: [id], onDelete: Cascade)
+
+  /// Calendar date only (time-of-day lives in startTime/endTime below) —
+  /// stored at UTC midnight, matching how joinedOn/other date-only columns
+  /// in this schema are handled.
+  date      DateTime
+  startTime String   @map("start_time")
+  endTime   String   @map("end_time")
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("ClassOccurrenceTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+  location  String
+  capacity  Int
+
+  status          ClassOccurrenceStatus @default(SCHEDULED)
+  cancelledReason String?               @map("cancelled_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  bookings ClassBooking[]
+
+  @@unique([classSeriesId, date])
+  @@index([tenantId, date])
+  @@index([trainerId, date])
+  @@map("class_occurrences")
+}
+
+/// CONFIRMED — holds a seat.
+/// WAITLISTED — no seat available at booking time; promoted to CONFIRMED
+///   automatically, FIFO by booking order, when a seat frees up — see
+///   ClassBookingsService.cancel.
+/// CANCELLED — withdrawn, by the member or by staff/class cancellation; the
+///   row is kept (and reused on rebooking — see the phase-level comment)
+///   rather than deleted, so booking history survives.
+/// ATTENDED / NO_SHOW — reserved for the later Attendance phase to set once
+///   roll is taken; nothing in this phase transitions a booking into either
+///   state, but the values exist now so Attendance doesn't need a schema
+///   migration of its own just to record outcomes on this table.
+enum ClassBookingStatus {
+  CONFIRMED
+  WAITLISTED
+  CANCELLED
+  ATTENDED
+  NO_SHOW
+
+  @@map("class_booking_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassBooking — a member's booking against one ClassOccurrence. See the
+// phase-level comment for the row-reuse-on-rebook design and the
+// concurrency approach used to keep capacity/waitlist accounting correct
+// under simultaneous requests.
+// ---------------------------------------------------------------------------
+model ClassBooking {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  classOccurrenceId String          @map("class_occurrence_id")
+  classOccurrence   ClassOccurrence @relation(fields: [classOccurrenceId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  status ClassBookingStatus @default(CONFIRMED)
+
+  /// Set/refreshed every time this row transitions into CONFIRMED or
+  /// WAITLISTED (including on rebook-after-cancel reusing this same row) —
+  /// distinct from createdAt, which only reflects the row's first-ever
+  /// insert and would otherwise misorder a rebooked member ahead of others
+  /// on the waitlist.
+  bookedAt    DateTime  @default(now()) @map("booked_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([classOccurrenceId, memberId])
+  @@index([tenantId, memberId])
+  @@index([classOccurrenceId, status])
+  @@map("class_bookings")
+}
+
+/// CONFIRMED — holds the slot.
+/// CANCELLED — withdrawn, by the member or by staff.
+/// COMPLETED / NO_SHOW — reserved for the later Attendance phase, same
+///   reasoning as ClassBookingStatus above.
+enum PtSessionStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+
+  @@map("pt_session_status")
+}
+
+// ---------------------------------------------------------------------------
+// PersonalTrainingSession — a member's 1:1 booking with a trainer, inside
+// one of that trainer's TrainerAvailability windows and free of conflicts
+// with the trainer's classes or other PT sessions (validated in
+// PtSessionsService, not the database — the same overlap-checking approach
+// used for ClassSeries trainer-conflict prevention). No payment/pricing
+// fields — see the phase's explicit instruction not to implement PT payment
+// processing yet.
+// ---------------------------------------------------------------------------
+model PersonalTrainingSession {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("PtSessionTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// Calendar date only, same convention as ClassOccurrence.date.
+  date            DateTime
+  startTime       String   @map("start_time")
+  durationMinutes Int      @map("duration_minutes")
+
+  status PtSessionStatus @default(CONFIRMED)
+  notes  String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId])
+  @@index([trainerId, date])
+  @@map("personal_training_sessions")
 }
