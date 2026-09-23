@@ -82,7 +82,18 @@ function NotificationRow({
   }
 
   return (
-    <div role="button" tabIndex={0} onClick={() => onOpen(item.id)} className={rowClassName}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(item.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(item.id);
+        }
+      }}
+      className={cn(rowClassName, "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset")}
+    >
       {content}
     </div>
   );

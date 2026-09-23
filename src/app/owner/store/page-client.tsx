@@ -774,8 +774,8 @@ export function StorePageClient() {
               {movements.length === 0 ? (
                 <EmptyState icon={Package} title="No movements yet" description="Stock activity will show up here." />
               ) : (
-                <div className="max-h-[420px] overflow-y-auto">
-                  <table className="w-full text-sm">
+                <div className="max-h-[420px] overflow-auto">
+                  <table className="w-full min-w-[560px] text-sm">
                     <thead className="sticky top-0 bg-card">
                       <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                         <th className="px-4 py-3 font-medium">Product</th>

@@ -24,11 +24,11 @@ import { gymClasses } from "@/lib/data/classes";
 import { classBookings as initialClassBookings } from "@/lib/data/class-bookings";
 import { ptSessions as initialPtSessions } from "@/lib/data/pt-sessions";
 import { formatDate } from "@/lib/utils-data";
+import { DEMO_TRAINER_ID, TODAY, TODAY_DAY } from "@/lib/booking-helpers";
 import type { ClassBooking, PtSession } from "@/lib/data/types";
 
-const TRAINER_ID = "tr-1";
-const TODAY_DAY = "Mon" as const;
-const TODAY_ISO = "2026-09-21";
+const TRAINER_ID = DEMO_TRAINER_ID;
+const TODAY_ISO = TODAY;
 
 export default function TrainerAttendancePage() {
   const [classBookings, setClassBookings] = React.useState<ClassBooking[]>(initialClassBookings);
@@ -128,7 +128,7 @@ export default function TrainerAttendancePage() {
                         ) : (
                           <div className="flex shrink-0 items-center gap-1.5">
                             <BookingStatusBadge status={entry.status} />
-                            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markClass(entry.id, "booked")}>
+                            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markClass(entry.id, "booked")} aria-label={`Revert ${entry.memberName} to booked`}>
                               <Undo2 className="size-3.5" />
                             </Button>
                           </div>
@@ -174,7 +174,7 @@ export default function TrainerAttendancePage() {
                 ) : (
                   <div className="flex shrink-0 items-center gap-1.5">
                     <BookingStatusBadge status={session.status} />
-                    <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markPt(session.id, "booked")}>
+                    <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markPt(session.id, "booked")} aria-label={`Revert ${session.memberName} to booked`}>
                       <Undo2 className="size-3.5" />
                     </Button>
                   </div>

@@ -7,10 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { BookingStatusBadge } from "@/components/shared/status-badge";
 import { gymClasses, daysOfWeek } from "@/lib/data/classes";
 import { ptSessions } from "@/lib/data/pt-sessions";
-import { dayFromDate } from "@/lib/booking-helpers";
+import { dayFromDate, DEMO_TRAINER_ID, TODAY_DAY } from "@/lib/booking-helpers";
 
-const TRAINER_ID = "tr-1";
-const TODAY_DAY = "Mon";
+const TRAINER_ID = DEMO_TRAINER_ID;
 
 export default function TrainerSchedulePage() {
   const myClasses = gymClasses.filter((c) => c.trainerId === TRAINER_ID);

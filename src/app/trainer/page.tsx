@@ -14,10 +14,10 @@ import { BookingStatusBadge } from "@/components/shared/status-badge";
 import { gymClasses, daysOfWeek } from "@/lib/data/classes";
 import { ptSessions as initialPtSessions } from "@/lib/data/pt-sessions";
 import { trainerPerformance } from "@/lib/data/reports";
+import { DEMO_TRAINER_ID, TODAY, TODAY_DAY } from "@/lib/booking-helpers";
 
-const TRAINER_ID = "tr-1";
-const TODAY_DAY: (typeof daysOfWeek)[number] = "Mon";
-const TODAY_ISO = "2026-09-21";
+const TRAINER_ID = DEMO_TRAINER_ID;
+const TODAY_ISO = TODAY;
 
 export default function TrainerDashboardPage() {
   const [ptSessions, setPtSessions] = React.useState(initialPtSessions);

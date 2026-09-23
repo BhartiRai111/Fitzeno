@@ -3,9 +3,9 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Menu, Search, LogOut, Settings, UserCircle } from "lucide-react";
+import { Bell, Menu, LogOut, Settings, UserCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { GlobalSearch } from "@/components/dashboard/global-search";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +55,12 @@ function notificationsHref(role: DashboardTopbarProps["role"]) {
   return "/portal/notifications";
 }
 
+function accountLink(role: DashboardTopbarProps["role"]) {
+  if (role === "owner") return { href: "/owner/settings", label: "Settings", icon: Settings };
+  if (role === "trainer") return { href: "/trainer/profile", label: "Profile", icon: UserCircle };
+  return { href: "/portal/profile", label: "Profile", icon: UserCircle };
+}
+
 export function DashboardTopbar({
   role,
   roleLabel,
@@ -72,6 +78,7 @@ export function DashboardTopbar({
       : role === "trainer"
         ? [{ items: trainerNavItems }]
         : [{ items: memberNavItems }];
+  const account = accountLink(role);
 
   return (
     <header className="no-print sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md sm:px-6">
@@ -86,7 +93,7 @@ export function DashboardTopbar({
       </Button>
 
       <div className="hidden max-w-sm flex-1 items-center sm:flex">
-        <Input startIcon={<Search />} placeholder={searchPlaceholder} className="bg-muted/40" />
+        <GlobalSearch role={role} placeholder={searchPlaceholder} />
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
@@ -173,15 +180,9 @@ export function DashboardTopbar({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="#">
-                <UserCircle />
-                Profile
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="#">
-                <Settings />
-                Settings
+              <Link href={account.href}>
+                <account.icon />
+                {account.label}
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

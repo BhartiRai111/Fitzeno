@@ -15,6 +15,8 @@ import { ResponsiveDialog } from "@/components/shared/responsive-dialog";
 import { DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { SheetHeader, SheetTitle, SheetDescription, SheetFooter } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useMembership, type PaymentMethodChoice } from "@/components/portal/membership-provider";
@@ -46,6 +48,22 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
   const [submitting, setSubmitting] = React.useState(false);
   const [result, setResult] = React.useState<"success" | "pending" | null>(null);
   const [confirmedExpiry, setConfirmedExpiry] = React.useState<string | null>(null);
+  const [cardNumber, setCardNumber] = React.useState("");
+  const [cardExpiry, setCardExpiry] = React.useState("");
+  const [cardCvc, setCardCvc] = React.useState("");
+
+  function formatCardNumber(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 16);
+    return digits.replace(/(.{4})/g, "$1 ").trim();
+  }
+
+  function formatExpiry(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 4);
+    return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+  }
+
+  const cardComplete =
+    method !== "Card" || (cardNumber.replace(/\D/g, "").length === 16 && cardExpiry.length === 5 && cardCvc.length >= 3);
 
   React.useEffect(() => {
     // Intentional: reset the flow each time this dialog reopens.
@@ -54,6 +72,9 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
       setPlanId(initialPlanId ?? currentPlan?.id ?? membershipPlans[0].id);
       setMethod("Card");
       setResult(null);
+      setCardNumber("");
+      setCardExpiry("");
+      setCardCvc("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialPlanId]);
@@ -194,6 +215,46 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
               </p>
             </div>
 
+            {method === "Card" && (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="renew-card-number">Card number</Label>
+                  <Input
+                    id="renew-card-number"
+                    inputMode="numeric"
+                    placeholder="4242 4242 4242 4242"
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
+                    maxLength={19}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="renew-card-expiry">Expiry</Label>
+                    <Input
+                      id="renew-card-expiry"
+                      inputMode="numeric"
+                      placeholder="MM/YY"
+                      value={cardExpiry}
+                      onChange={(e) => setCardExpiry(formatExpiry(e.target.value))}
+                      maxLength={5}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="renew-card-cvc">CVC</Label>
+                    <Input
+                      id="renew-card-cvc"
+                      inputMode="numeric"
+                      placeholder="123"
+                      value={cardCvc}
+                      onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                      maxLength={4}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <Separator />
 
             <div className="space-y-1.5 text-sm">
@@ -215,7 +276,7 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="button" loading={submitting} onClick={handleConfirm}>
+            <Button type="button" loading={submitting} disabled={!cardComplete} onClick={handleConfirm}>
               {isSamePlan ? "Renew Now" : `Switch to ${selectedPlan.name}`}
             </Button>
           </Footer>

@@ -6,7 +6,6 @@ import {
   Mail,
   Phone,
   Tag,
-  Calendar,
   CheckCircle2,
   XCircle,
   CalendarPlus,

@@ -86,4 +86,5 @@ export const trainerNavItems: NavItem[] = [
   { label: "Attendance", href: "/trainer/attendance", icon: ClipboardCheck },
   { label: "Availability", href: "/trainer/availability", icon: CalendarClock },
   { label: "Notifications", href: "/trainer/notifications", icon: Bell },
+  { label: "Profile", href: "/trainer/profile", icon: UserCircle },
 ];

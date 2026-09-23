@@ -62,14 +62,15 @@ function initialsFor(name: string): string {
 export function LeadsPageClient() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get("tab") as TabValue) ?? "all";
+  const initialLeadId = searchParams.get("leadId");
 
   const [leads, setLeads] = React.useState<Lead[]>(initialLeads);
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [sourceFilter, setSourceFilter] = React.useState("all");
   const [assigneeFilter, setAssigneeFilter] = React.useState("all");
-  const [selectedLeadId, setSelectedLeadId] = React.useState<string | null>(null);
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [selectedLeadId, setSelectedLeadId] = React.useState<string | null>(initialLeadId);
+  const [sheetOpen, setSheetOpen] = React.useState(!!initialLeadId);
 
   const assigneeOptions = React.useMemo(
     () => Array.from(new Set(["Front Desk", ...staffMembers.map((s) => s.name), ...trainers.map((t) => t.name)])),

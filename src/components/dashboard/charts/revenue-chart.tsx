@@ -46,7 +46,7 @@ export function RevenueChart({ data = revenueByMonth, xKey = "month", height = 2
             border: "1px solid var(--color-border)",
             borderRadius: 10,
             fontSize: 13,
-            boxShadow: "0 8px 20px rgb(16 19 34 / 0.12)",
+            boxShadow: "0 8px 20px rgb(var(--shadow-color) / 0.12)",
           }}
           labelStyle={{ color: "var(--color-foreground)", fontWeight: 600 }}
           formatter={(value) => [`£${Number(value).toLocaleString()}`, "Revenue"]}

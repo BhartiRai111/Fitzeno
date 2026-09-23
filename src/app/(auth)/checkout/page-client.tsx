@@ -21,6 +21,8 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/brand/logo";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -53,6 +55,22 @@ export function CheckoutPageClient() {
   const [method, setMethod] = React.useState<Method>("Card");
   const [submitting, setSubmitting] = React.useState(false);
   const [step, setStep] = React.useState<Step>("review");
+  const [cardNumber, setCardNumber] = React.useState("");
+  const [cardExpiry, setCardExpiry] = React.useState("");
+  const [cardCvc, setCardCvc] = React.useState("");
+
+  function formatCardNumber(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 16);
+    return digits.replace(/(.{4})/g, "$1 ").trim();
+  }
+
+  function formatExpiry(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 4);
+    return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+  }
+
+  const cardComplete =
+    method !== "Card" || (cardNumber.replace(/\D/g, "").length === 16 && cardExpiry.length === 5 && cardCvc.length >= 3);
 
   if (!plan) {
     return (
@@ -172,6 +190,46 @@ export function CheckoutPageClient() {
                 </p>
               </div>
 
+              {method === "Card" && (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="card-number">Card number</Label>
+                    <Input
+                      id="card-number"
+                      inputMode="numeric"
+                      placeholder="4242 4242 4242 4242"
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
+                      maxLength={19}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="card-expiry">Expiry</Label>
+                      <Input
+                        id="card-expiry"
+                        inputMode="numeric"
+                        placeholder="MM/YY"
+                        value={cardExpiry}
+                        onChange={(e) => setCardExpiry(formatExpiry(e.target.value))}
+                        maxLength={5}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="card-cvc">CVC</Label>
+                      <Input
+                        id="card-cvc"
+                        inputMode="numeric"
+                        placeholder="123"
+                        value={cardCvc}
+                        onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                        maxLength={4}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <Separator />
 
               <div className="space-y-1.5 text-sm">
@@ -191,7 +249,13 @@ export function CheckoutPageClient() {
               </div>
             </CardContent>
             <CardFooter className="flex-col gap-3">
-              <Button type="button" className="w-full" loading={submitting} onClick={handleConfirm}>
+              <Button
+                type="button"
+                className="w-full"
+                loading={submitting}
+                disabled={!cardComplete}
+                onClick={handleConfirm}
+              >
                 Confirm &amp; Pay {formatCurrency(price)}
               </Button>
               <Separator />

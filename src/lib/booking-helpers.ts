@@ -3,6 +3,7 @@ import type { ClassBooking, GymClass, PtSession, TrainerAvailabilitySlot } from 
 
 /** Fixed "current moment" for this demo build — no live backend/clock. */
 export const TODAY = "2026-09-21";
+export const TODAY_DAY: GymClass["day"] = "Mon";
 export const NOW_ISO = "2026-09-21T14:00:00";
 export const CANCELLATION_WINDOW_HOURS = 4;
 export const DEMO_MEMBER_ID = "m-1";

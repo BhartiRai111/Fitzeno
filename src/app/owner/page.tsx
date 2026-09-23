@@ -337,8 +337,8 @@ export default function OwnerOverviewPage() {
                         </p>
                       </div>
                     </div>
-                    <Button size="sm" variant="ghost" className="shrink-0">
-                      Follow up
+                    <Button size="sm" variant="ghost" className="shrink-0" asChild>
+                      <Link href={`/owner/leads?leadId=${lead.id}`}>Follow up</Link>
                     </Button>
                   </div>
                 ))}

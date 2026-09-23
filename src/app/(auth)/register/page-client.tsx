@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/brand/logo";
+import { LegalDialog } from "@/components/shared/legal-dialog";
 import { cn } from "@/lib/utils";
 import { membershipPlans } from "@/lib/data/plans";
 
@@ -44,6 +45,7 @@ export function RegisterPageClient() {
   const [agreed, setAgreed] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [legalDoc, setLegalDoc] = React.useState<"terms" | "privacy" | null>(null);
 
   const strength = passwordStrength(password);
 
@@ -142,15 +144,28 @@ export function RegisterPageClient() {
               />
               <Label htmlFor="terms" className="text-sm font-normal text-muted-foreground">
                 I agree to the{" "}
-                <Link href="#" className="font-medium text-primary hover:underline">
+                <button
+                  type="button"
+                  onClick={() => setLegalDoc("terms")}
+                  className="font-medium text-primary hover:underline"
+                >
                   Terms of Service
-                </Link>{" "}
+                </button>{" "}
                 and{" "}
-                <Link href="#" className="font-medium text-primary hover:underline">
+                <button
+                  type="button"
+                  onClick={() => setLegalDoc("privacy")}
+                  className="font-medium text-primary hover:underline"
+                >
                   Privacy Policy
-                </Link>
+                </button>
               </Label>
             </div>
+            <LegalDialog
+              doc={legalDoc ?? "terms"}
+              open={legalDoc !== null}
+              onOpenChange={(open) => !open && setLegalDoc(null)}
+            />
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
