@@ -29,26 +29,113 @@ datasource db {
   provider = "postgresql"
 }
 
+/// ONBOARDING — just created via /auth/register-business; fully usable, but
+///   flagged so the frontend can show a "finish setting up" nudge. Flips to
+///   ACTIVE automatically the first time the owner saves their gym profile.
+/// ACTIVE — normal operation.
+/// INACTIVE — the owner has paused/closed the gym themselves. Self-service
+///   reversible (PATCH /tenants/me/status back to ACTIVE).
+/// SUSPENDED — a platform-level hold (not reachable through any endpoint
+///   yet — no platform-admin surface exists this phase). Reserved so the
+///   enforcement path and the schema don't need to change when one lands;
+///   deliberately NOT self-liftable by the gym's own owner.
+enum TenantStatus {
+  ONBOARDING
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@map("tenant_status")
+}
+
 // ---------------------------------------------------------------------------
 // Tenant — one row per gym/business using the platform. Every tenant-owned
 // table below carries a tenantId so one gym's data is never reachable from
 // another's request context. This phase starts actually enforcing that in
 // application code (every UsersService query filters by tenantId) rather
 // than just carrying the column, per the foundation phase's README note.
+//
+// Identity (name/slug) and public/business-profile fields live directly on
+// this table — they're core to what a "gym" IS, queried together with every
+// other tenant lookup, and small/scalar enough that JSON would just add
+// indirection. Operational preferences that are edited together as one
+// settings document (hours, membership policy, notification/payment
+// toggles) live in the separate 1:1 TenantSettings table instead — see its
+// own comment for why those are JSON columns rather than more tables.
 // ---------------------------------------------------------------------------
 model Tenant {
-  id        String    @id @default(uuid())
-  name      String
-  /// URL-safe unique handle, e.g. for a future custom subdomain or public slug.
-  slug      String    @unique
-  timezone  String    @default("Europe/London")
+  id     String       @id @default(uuid())
+  name   String
+  /// URL-safe unique handle — resolves a member-registration request to the
+  /// right gym (see AuthService.resolveTenantForRegistration) and doubles as
+  /// a future public-page/subdomain handle. Set at creation, immutable via
+  /// the API for now (changing it would break outstanding join links).
+  slug   String       @unique
+  status TenantStatus @default(ONBOARDING)
+
+  /// Shown on the public site and member/staff apps — see gymProfile in the
+  /// approved frontend's mock data for the shape this mirrors.
+  tagline     String?
+  description String?
+  logoUrl     String?  @map("logo_url")
+  phone       String?
+  email       String?
+  website     String?
+  addressLine String?  @map("address_line")
+  city        String?
+  region      String?
+  postalCode  String?  @map("postal_code")
+  country     String?
+
+  timezone String @default("Europe/London")
+  currency String @default("GBP")
+  locale   String @default("en-GB")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users User[]
+  users    User[]
+  settings TenantSettings?
 
   @@map("tenants")
+}
+
+// ---------------------------------------------------------------------------
+// TenantSettings — the operational configuration a gym owner edits from the
+// Settings page, one-to-one with Tenant. Each column is a specific, documented
+// shape (not a generic key-value bag) matching one tab of the approved
+// Settings UI; JSON is the right fit here because each one is a small,
+// bounded, list/toggle-map structure that's always read and written as a
+// whole document per tab, not queried or indexed by its individual fields —
+// normalizing "freeze days" or "accepts card payments" into their own
+// columns/tables would add schema churn with no real query benefit.
+// Created together with every Tenant (see AuthService.registerBusiness and
+// prisma/seed.ts) so it always exists; TenantsService defensively creates a
+// default-valued row on first read for any tenant that predates that.
+// ---------------------------------------------------------------------------
+model TenantSettings {
+  id       String @id @default(uuid())
+  tenantId String @unique @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// [{ day: string, time: string }, ...] — matches the Settings > Business
+  /// Hours tab exactly (free-text time range per day/day-group).
+  businessHours Json @default("[]") @map("business_hours")
+  /// { freezesPerYear, maxFreezeDurationDays, cancellationNoticeDays,
+  ///   renewalReminderDaysBefore: number[] } — membership policy defaults
+  /// the future Memberships module will read, not a memberships table.
+  membershipPolicy Json @default("{}") @map("membership_policy")
+  /// { card, upi, cash, bankTransfer: boolean } — accepted payment methods.
+  paymentMethods Json @default("{}") @map("payment_methods")
+  /// { member: {...}, staff: {...} } — platform-wide communication-channel
+  /// toggles (per-user notification preferences are a separate concern).
+  notificationPreferences Json @default("{}") @map("notification_preferences")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("tenant_settings")
 }
 
 /// Mirrors the frontend's StaffAccessRole ("owner" | "manager" | "trainer" |

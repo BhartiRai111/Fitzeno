@@ -16,7 +16,9 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor.
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
 import { RolesGuard } from './common/guards/roles.guard.js';
+import { TenantStatusGuard } from './common/guards/tenant-status.guard.js';
 import { PermissionsGuard } from './authz/permissions.guard.js';
+import { TenantsModule } from './tenants/tenants.module.js';
 
 @Module({
   imports: [
@@ -40,6 +42,7 @@ import { PermissionsGuard } from './authz/permissions.guard.js';
     PrismaModule,
     AuthModule,
     AuthzModule,
+    TenantsModule,
     HealthModule,
   ],
   providers: [
@@ -51,6 +54,7 @@ import { PermissionsGuard } from './authz/permissions.guard.js';
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: TenantStatusGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],

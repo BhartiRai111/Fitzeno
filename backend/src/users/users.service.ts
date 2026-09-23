@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from '../auth/password.service.js';
 import { PermissionArea, PermissionLevel, UserRole, UserStatus } from '../generated/prisma/enums.js';
+import type { TenantStatus } from '../generated/prisma/enums.js';
 import type { User } from '../generated/prisma/client.js';
 import { PaginatedResult, type PaginationQueryDto } from '../common/dto/pagination-query.dto.js';
 import { toUserResponse, type UserResponseDto } from './dto/user-response.dto.js';
@@ -28,6 +29,10 @@ export interface ListUsersFilter {
   status?: UserStatus;
 }
 
+export interface UserWithTenantStatus extends User {
+  tenant: { status: TenantStatus; deletedAt: Date | null };
+}
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -43,6 +48,28 @@ export class UsersService {
   /** Used by JwtStrategy — no tenant context available yet at that point in the request. */
   findById(id: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { id } });
+  }
+
+  /**
+   * Same lookups as findByEmail/findById, but joined with the owning
+   * tenant's live status in one query — used everywhere a session is
+   * (re)validated (login, refresh, JwtStrategy) so a gym that's been
+   * suspended or paused mid-session is caught in the same round trip that
+   * already re-checks the user's own account status, rather than a second
+   * query on every request.
+   */
+  findByEmailWithTenantStatus(email: string): Promise<UserWithTenantStatus | null> {
+    return this.prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      include: { tenant: { select: { status: true, deletedAt: true } } },
+    });
+  }
+
+  findByIdWithTenantStatus(id: string): Promise<UserWithTenantStatus | null> {
+    return this.prisma.user.findUnique({
+      where: { id },
+      include: { tenant: { select: { status: true, deletedAt: true } } },
+    });
   }
 
   async findByIdInTenant(tenantId: string, id: string): Promise<User> {

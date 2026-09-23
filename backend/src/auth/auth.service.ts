@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -10,12 +12,20 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
 import { toUserResponse, type UserResponseDto } from '../users/dto/user-response.dto.js';
-import { UserRole, UserStatus } from '../generated/prisma/enums.js';
-import type { User } from '../generated/prisma/client.js';
+import { UserRole, UserStatus, TenantStatus } from '../generated/prisma/enums.js';
+import type { Prisma, Tenant, User } from '../generated/prisma/client.js';
 import type { JwtPayload } from '../common/types/jwt-payload.interface.js';
+import { slugify } from '../tenants/tenant-slug.util.js';
+import {
+  DEFAULT_BUSINESS_HOURS,
+  DEFAULT_MEMBERSHIP_POLICY,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  DEFAULT_PAYMENT_METHODS,
+} from '../tenants/tenant-defaults.const.js';
 import { PasswordService } from './password.service.js';
 import { TokenService } from './token.service.js';
 import type { RegisterDto } from './dto/register.dto.js';
+import type { RegisterBusinessDto } from './dto/register-business.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { ChangePasswordDto } from './dto/change-password.dto.js';
 
@@ -45,8 +55,9 @@ export class AuthService {
     private readonly configService: ConfigService,
   ) {}
 
+  /** Joins an EXISTING gym as a MEMBER. To create a new gym, see registerBusiness(). */
   async register(dto: RegisterDto, meta: RequestMeta): Promise<AuthResult> {
-    const tenant = await this.resolveDefaultTenant();
+    const tenant = await this.resolveTenantForRegistration(dto.tenantSlug);
     const passwordHash = await this.passwordService.hash(dto.password);
 
     const user = await this.usersService.create({
@@ -62,8 +73,56 @@ export class AuthService {
     return this.issueSession(user, meta);
   }
 
+  /**
+   * The owner-onboarding entry point: creates a brand-new gym (ONBOARDING
+   * status, default settings) and its first user — an OWNER — atomically,
+   * then signs them in immediately. Lives here rather than on TenantsService
+   * specifically to reuse issueSession() (JWT signing + refresh-token
+   * issuance) without exposing it outside AuthService, and to keep
+   * TenantsModule from ever needing to depend on AuthModule — see
+   * TenantsController's own comment on why gym *creation* is here.
+   */
+  async registerBusiness(dto: RegisterBusinessDto, meta: RequestMeta): Promise<AuthResult> {
+    const existingOwner = await this.usersService.findByEmail(dto.ownerEmail);
+    if (existingOwner) {
+      throw new ConflictException('An account with this email already exists.');
+    }
+
+    const slug = await this.generateUniqueTenantSlug(dto.businessName);
+    const passwordHash = await this.passwordService.hash(dto.ownerPassword);
+
+    const owner = await this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.create({
+        data: { name: dto.businessName, slug, status: TenantStatus.ONBOARDING },
+      });
+      await tx.tenantSettings.create({
+        data: {
+          tenantId: tenant.id,
+          businessHours: DEFAULT_BUSINESS_HOURS,
+          membershipPolicy: DEFAULT_MEMBERSHIP_POLICY,
+          paymentMethods: DEFAULT_PAYMENT_METHODS,
+          notificationPreferences: DEFAULT_NOTIFICATION_PREFERENCES,
+        } satisfies Prisma.TenantSettingsUncheckedCreateInput,
+      });
+      return tx.user.create({
+        data: {
+          tenantId: tenant.id,
+          email: dto.ownerEmail.toLowerCase(),
+          passwordHash,
+          firstName: dto.ownerFirstName,
+          lastName: dto.ownerLastName,
+          phone: dto.ownerPhone,
+          role: UserRole.OWNER,
+          status: UserStatus.ACTIVE,
+        },
+      });
+    });
+
+    return this.issueSession(owner, meta);
+  }
+
   async login(dto: LoginDto, meta: RequestMeta): Promise<AuthResult> {
-    const user = await this.usersService.findByEmail(dto.email);
+    const user = await this.usersService.findByEmailWithTenantStatus(dto.email);
     if (!user || user.deletedAt) {
       throw new UnauthorizedException('Invalid email or password.');
     }
@@ -84,11 +143,11 @@ export class AuthService {
     }
 
     // Checked only after a correct password, so a caller without the
-    // password can't use this response to enumerate which accounts are
-    // inactive.
+    // password can't use either response to enumerate account/gym state.
     if (user.status === UserStatus.INACTIVE) {
       throw new ForbiddenException('This account is inactive. Contact your gym owner to restore access.');
     }
+    this.assertTenantUsable(user.tenant);
 
     await this.usersService.touchLastLogin(user.id);
     return this.issueSession(user, meta);
@@ -121,10 +180,11 @@ export class AuthService {
       throw new UnauthorizedException('Session expired — please log in again.');
     }
 
-    const user = await this.usersService.findById(stored.userId);
+    const user = await this.usersService.findByIdWithTenantStatus(stored.userId);
     if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('This account is no longer active.');
     }
+    this.assertTenantUsable(user.tenant, UnauthorizedException);
 
     const result = await this.issueSession(user, meta);
 
@@ -246,9 +306,29 @@ export class AuthService {
     return days * 24 * 60 * 60 * 1000;
   }
 
-  private async resolveDefaultTenant() {
-    const tenant = await this.prisma.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
-    if (!tenant) {
+  /**
+   * Resolves which gym a member-registration request joins. An explicit
+   * slug (the eventual per-gym join-link/QR-code flow) always wins. Without
+   * one, falling back to "the only gym that exists" keeps today's
+   * single-tenant dev/demo flow working unchanged — but the moment a
+   * second gym exists, guessing would risk silently signing someone up
+   * under the wrong business, so it refuses instead. The public register
+   * page doesn't collect a gym identifier yet; wiring that (and this
+   * fallback with it) is frontend work for a later phase, once real
+   * multi-tenant signup links exist.
+   */
+  private async resolveTenantForRegistration(tenantSlug?: string): Promise<Tenant> {
+    if (tenantSlug) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+      if (!tenant || tenant.deletedAt) {
+        throw new NotFoundException('No gym found for that link.');
+      }
+      this.assertTenantJoinable(tenant);
+      return tenant;
+    }
+
+    const tenants = await this.prisma.tenant.findMany({ take: 2, orderBy: { createdAt: 'asc' } });
+    if (tenants.length === 0) {
       // Genuinely a deployment/seed problem, not a user error — a fresh
       // database with no tenant at all means `npm run db:seed` was never
       // run (see backend/README.md).
@@ -256,7 +336,47 @@ export class AuthService {
         'No gym is set up on this server yet. Run the database seed before registering an account.',
       );
     }
-    return tenant;
+    if (tenants.length > 1) {
+      throw new BadRequestException(
+        'Multiple gyms exist on this server — registration must specify which one to join.',
+      );
+    }
+    this.assertTenantJoinable(tenants[0]!);
+    return tenants[0]!;
+  }
+
+  private assertTenantJoinable(tenant: Tenant): void {
+    if (tenant.status === TenantStatus.SUSPENDED || tenant.status === TenantStatus.INACTIVE) {
+      throw new ForbiddenException('This gym is not currently accepting new members.');
+    }
+  }
+
+  /**
+   * Same SUSPENDED/INACTIVE check as assertTenantJoinable, for an EXISTING
+   * account's session being (re)established (login/refresh) rather than a
+   * new one being created — worded and typed as "no longer active" to match
+   * the surrounding account-state messaging, and throwing whichever
+   * exception the caller's other checks in the same flow already use.
+   */
+  private assertTenantUsable(
+    tenant: { status: TenantStatus; deletedAt: Date | null },
+    ExceptionType: new (message: string) => Error = ForbiddenException,
+  ): void {
+    if (tenant.deletedAt || tenant.status === TenantStatus.SUSPENDED || tenant.status === TenantStatus.INACTIVE) {
+      throw new ExceptionType('This gym is not currently active. Contact your gym owner or support.');
+    }
+  }
+
+  private async generateUniqueTenantSlug(businessName: string): Promise<string> {
+    const base = slugify(businessName) || 'gym';
+    let candidate = base;
+    let suffix = 1;
+    // Sequential by necessity — each check depends on the previous candidate.
+    while (await this.prisma.tenant.findUnique({ where: { slug: candidate } })) {
+      suffix += 1;
+      candidate = `${base}-${suffix}`;
+    }
+    return candidate;
   }
 
   private async issueSession(user: User, meta: RequestMeta): Promise<AuthResult> {

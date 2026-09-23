@@ -110,7 +110,7 @@ describe('Auth + Users (e2e)', () => {
     it('creates a MEMBER account and issues a session', async () => {
       const response = await request(server())
         .post('/api/v1/auth/register')
-        .send({ email, password: KNOWN_PASSWORD, firstName: 'New', lastName: 'Member' })
+        .send({ email, password: KNOWN_PASSWORD, firstName: 'New', lastName: 'Member', tenantSlug: TEST_TENANT_SLUG })
         .expect(201);
 
       expect(response.body.success).toBe(true);
@@ -123,7 +123,7 @@ describe('Auth + Users (e2e)', () => {
     it('rejects a duplicate email with 409 Conflict', async () => {
       const response = await request(server())
         .post('/api/v1/auth/register')
-        .send({ email, password: KNOWN_PASSWORD, firstName: 'New', lastName: 'Member' })
+        .send({ email, password: KNOWN_PASSWORD, firstName: 'New', lastName: 'Member', tenantSlug: TEST_TENANT_SLUG })
         .expect(409);
 
       expect(response.body.error.code).toBe('CONFLICT');
@@ -132,7 +132,13 @@ describe('Auth + Users (e2e)', () => {
     it('rejects a password shorter than the minimum with 400 and validation details', async () => {
       const response = await request(server())
         .post('/api/v1/auth/register')
-        .send({ email: `${TEST_EMAIL_MARKER}-short@example.com`, password: 'short', firstName: 'A', lastName: 'B' })
+        .send({
+          email: `${TEST_EMAIL_MARKER}-short@example.com`,
+          password: 'short',
+          firstName: 'A',
+          lastName: 'B',
+          tenantSlug: TEST_TENANT_SLUG,
+        })
         .expect(400);
 
       expect(response.body.error.code).toBe('VALIDATION_ERROR');

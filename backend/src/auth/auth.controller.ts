@@ -18,6 +18,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.interface.js';
 import { AuthService, type AuthResult } from './auth.service.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { RegisterBusinessDto } from './dto/register-business.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
@@ -43,6 +44,23 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthResponseDto> {
     const result = await this.authService.register(dto, this.requestMeta(req));
+    return this.respondWithSession(res, result);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Post('register-business')
+  @ApiOperation({
+    summary: 'Create a new gym and its owner account.',
+    description:
+      'The owner-onboarding entry point — creates a Tenant (status ONBOARDING, default settings) and its first user (role OWNER) atomically, then signs them in. To join an EXISTING gym as a member, use /auth/register instead.',
+  })
+  async registerBusiness(
+    @Body() dto: RegisterBusinessDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthResponseDto> {
+    const result = await this.authService.registerBusiness(dto, this.requestMeta(req));
     return this.respondWithSession(res, result);
   }
 

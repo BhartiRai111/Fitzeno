@@ -30,4 +30,14 @@ export class RegisterDto {
   @IsString()
   @Matches(/^[+()\d][\d\s()+-]{5,19}$/, { message: 'phone must be a valid phone number' })
   phone?: string;
+
+  @ApiPropertyOptional({
+    example: 'riverside-fitness',
+    description:
+      "The gym's slug to join. Required once more than one gym exists on this server — omit it only when there's exactly one.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  tenantSlug?: string;
 }

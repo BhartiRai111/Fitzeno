@@ -4,14 +4,16 @@ The backend for the Fitzeno gym management platform — a NestJS 12 service on
 PostgreSQL via Prisma, built to sit behind the existing Next.js frontend in
 `../src`.
 
-**Status:** identity and access-control layer complete. On top of the
-app-bootstrap foundation (config, database, error/response envelope,
-security headers, Swagger), this phase adds real authentication
-(register/login/refresh/logout, password reset, staff invites), a clean
-`User` identity model, and a role + configurable-permission authorization
-system — everything every future business module (members, classes,
-bookings, payments, ...) will authenticate and authorize against. No
-business-domain endpoints exist yet — see
+**Status:** identity, access-control, and multi-tenant gym/business
+management complete. On top of the app-bootstrap foundation (config,
+database, error/response envelope, security headers, Swagger) and the
+auth/authorization layer (register/login/refresh/logout, roles +
+configurable permissions), this phase adds the **Gym/Business workspace**
+itself — real owner onboarding (create a gym + its owner account in one
+step), a business profile + settings model, and enforced multi-tenant
+isolation — everything every future business module (members, classes,
+bookings, payments, ...) will scope its data to. No business-domain
+endpoints exist yet — see
 [What's here / What's not](#whats-here--whats-not) below.
 
 ## Stack
@@ -92,12 +94,16 @@ Creates one tenant ("Fitzeno — Riverside District", matching the frontend's
 mock `gymProfile`) and one `OWNER` user (`owner@fitzeno.app` /
 `ChangeMe123!`) — dev-only credentials, never reused anywhere real.
 
-Registration (`POST /auth/register`) always resolves to the single
-earliest-created tenant, so a fresh, unseeded database with zero tenants
-will refuse registration with a clear error — run the seed (or otherwise
-create a `Tenant` row) before exercising the auth flow end-to-end. Staff
-accounts (Manager/Trainer/Front Desk) aren't self-registered — an `OWNER`
-invites them via `POST /users/invite`; only `MEMBER` accounts go through
+`POST /auth/register-business` is how a brand-new gym gets created (see
+[Gym / business management](#gym--business-management)) — the seed above
+is just a convenience so there's already something to log into. Joining an
+**existing** gym (`POST /auth/register`) resolves which one via an
+optional `tenantSlug`; omit it and it falls back to "the only gym that
+exists," which is what makes the seeded single-tenant setup above work
+without any extra parameters — but it refuses to guess once a second gym
+exists (see [Tenant isolation](#tenant-isolation)). Staff accounts
+(Manager/Trainer/Front Desk) aren't self-registered — an `OWNER` invites
+them via `POST /users/invite`; only `MEMBER` accounts go through
 `/auth/register`.
 
 ### 6. Run the server
@@ -152,16 +158,21 @@ backend/
       filters/               AllExceptionsFilter — one error envelope, always
       interceptors/          ResponseInterceptor (success envelope),
                             LoggingInterceptor
-      guards/                JwtAuthGuard, RolesGuard — registered globally
-      decorators/            @Public(), @Roles(), @CurrentUser()
+      guards/                JwtAuthGuard, RolesGuard, TenantStatusGuard —
+                            registered globally
+      decorators/            @Public(), @Roles(), @CurrentUser(),
+                            @SkipTenantStatusCheck()
       types/                 shared request/JWT payload interfaces
-    auth/                   register/login/refresh/logout/me, forgot/reset
-                            password, change-password — see Authentication
+    auth/                   register/register-business/login/refresh/logout/
+                            me, forgot/reset password, change-password — see
+                            Authentication
     authz/                  role-permission defaults, PermissionsService,
                             @RequirePermission()/PermissionsGuard — see
                             Roles & permissions
     users/                  the staff/team directory: list, invite,
                             status/role, permission overrides
+    tenants/                the current gym: profile, settings, status — see
+                            Gym / business management
     health/                 GET /api/v1/health
     generated/prisma/        Prisma's generated client (gitignored, regenerate
                             with `npm run prisma:generate`)
@@ -200,7 +211,7 @@ be followed by every model added in later phases:
   client extension/middleware); that's an explicit next-phase decision once
   there's real business data to filter.
 - Tenant-scoped tables carry a `tenantId` foreign key **and** an index on
-  it. See [Tenant isolation](#tenant-isolation-a-deliberately-unfinished-story)
+  it. See [Tenant isolation](#tenant-isolation)
   below for what this does and doesn't guarantee yet.
 - snake_case column/table names in Postgres (`@map`/`@@map`), camelCase in
   the generated TypeScript client — keeps SQL idiomatic while the
@@ -381,50 +392,138 @@ later phase adds on top of the same `User` row via their own `userId` FK).
 `AuthService`, `JwtStrategy`, and `UsersController` all go through it
 rather than querying Prisma directly, so "how a user is looked up/created"
 stays in one place. Every query is scoped to `tenantId` — see
-[Tenant isolation](#tenant-isolation-a-deliberately-unfinished-story).
+[Tenant isolation](#tenant-isolation).
 
 Every response uses `UserResponseDto`/`toUserResponse()`
 (`users/dto/user-response.dto.ts`), which strips `passwordHash` — nothing
 in this codebase should ever return a raw Prisma `User` object from an
 endpoint.
 
-### Tenant isolation: a deliberately unfinished story
+### Gym / business management
+
+`Tenant` *is* "a gym" — the workspace every Owner/Manager/Trainer/Front
+Desk/Member belongs to (via `User.tenantId`), and the boundary every
+future business module's data will be scoped inside. This phase turns it
+from a bare `id`/`name`/`slug` row (the previous phase's foundation) into a
+real, manageable business:
+
+- **Owner onboarding**: `POST /auth/register-business` (public, throttled
+  3/min like `/auth/register`) creates a brand-new `Tenant` (status
+  `ONBOARDING`, default-valued `TenantSettings`) and its first user — an
+  `OWNER` — in one atomic transaction, then signs them straight in. This is
+  the "create a gym" step the product brief describes as *registration →
+  gym creation → owner relationship → ready for dashboard*; there's
+  deliberately no separate "finish setting up" gate before the owner can
+  use their new account. To join an **existing** gym as a `MEMBER`, use
+  `POST /auth/register` instead (unchanged route, now resolving which
+  tenant to join — see [Tenant isolation](#tenant-isolation) below).
+- **Business profile**: name, tagline, description, logo URL, contact
+  (phone/email/website), address, and regional defaults
+  (timezone/currency/locale) live directly on `Tenant` — see
+  `GET`/`PATCH /tenants/me`. Deliberately excludes anything member/staff/
+  identity-shaped; that stays on `User`.
+- **Settings**: `TenantSettings` (one-to-one with `Tenant`) holds the
+  operational configuration a gym owner edits from the Settings page —
+  business hours, membership policy defaults (freezes, cancellation
+  notice, renewal reminders), accepted payment methods, and
+  member/staff notification-channel toggles. Four purpose-built JSON
+  columns, one per Settings-page tab, not a generic key-value table — see
+  `GET`/`PATCH /tenants/me/settings` and the comment on `TenantSettings` in
+  `prisma/schema.prisma` for why JSON was the right call here specifically.
+  Every section is independently optional in the `PATCH` body, matching
+  how the Settings page saves one tab at a time.
+- **Status & lifecycle** (`TenantStatus`): `ONBOARDING` (just created,
+  fully usable — flips to `ACTIVE` automatically the first time the owner
+  saves a profile change, no separate "activate" call needed) → `ACTIVE`
+  (normal operation) ⇄ `INACTIVE` (the owner paused/closed the gym
+  themselves — reversible via `PATCH /tenants/me/status`) or → `SUSPENDED`
+  (a platform-level hold; the schema and enforcement path support it, but
+  no endpoint can set or lift it yet — there's no platform-admin surface
+  in this phase, per the brief's own scoping).
+- **A suspended/inactive gym blocks ordinary access** (`TenantStatusGuard`,
+  global) for everyone in it, owner included — except two routes marked
+  `@SkipTenantStatusCheck()`: `GET /tenants/me` (so the frontend can show
+  *why* access is blocked) and `PATCH /tenants/me/status` (so an owner can
+  reverse their own pause — a suspension is NOT self-liftable, enforced at
+  the service layer, not the guard, since the guard has no way to tell
+  "owner reactivating their own pause" from "owner trying to escape a
+  platform suspension" — see `TenantsService.updateStatus`). Login and
+  token refresh check the same thing (`AuthService.login`/`refresh`), so a
+  paused gym can't even start a new session, not just lose access mid-one.
+- **Every gym-management route resolves "the current gym" from the
+  caller's own JWT** (`@CurrentUser().tenantId`) — there is no `GET/PATCH
+  /tenants/:id`. A resource reachable only as "mine" cannot leak across
+  tenants by construction; no ownership check needed because there's
+  nothing to check an ownership claim against.
+- **Authorization reuses the existing role/permission model exactly**:
+  profile and settings routes are gated on the `SETTINGS` `PermissionArea`
+  (`OWNER`: MANAGE, `MANAGER`: VIEW, everyone else: NONE — already defined
+  in `authz/role-permissions.const.ts` from the previous phase, unchanged
+  here) via `@RequirePermission()`; pausing/reactivating the gym is gated
+  on the `OWNER` role directly via `@Roles()`, the same pattern
+  `UsersController` uses for role changes — a business-wide lifecycle
+  action isn't something a permission override should be able to grant.
+
+### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
-request context. Every tenant-owned table has `tenantId` + an index, an
-authenticated request's JWT carries `tenantId` via `@CurrentUser()`, and
-`UsersService` — the first real tenant-scoped service — actually applies
-it: every list/lookup query includes `tenantId` in its `where` clause
-(`findByIdInTenant` returns `404`, not `403`, for a real row in a different
-tenant — it doesn't even confirm the id exists elsewhere). What's still
-missing is a *shared, generic* enforcement mechanism — there's no single
-guard that can know "does resource X belong to tenant Y" without knowing
-what X is, so each new tenant-scoped service has to remember to filter by
-`tenantId` itself rather than getting it for free. Worth revisiting with a
-Prisma Client extension (a `$extends` that auto-injects the tenant filter)
-now that there are two real services (`UsersService`, and the `Tenant`
-lookup in `AuthService`) to prove the pattern against.
+request context — this phase is where that stops being a schema
+convention and becomes an enforced one. Every tenant-owned table carries
+`tenantId` + an index, and an authenticated request's JWT carries
+`tenantId` via `@CurrentUser()`. Two access patterns cover every route in
+this codebase so far, and are meant to be the only two future modules need:
+
+1. **"The current gym/record"** — the resource is *always* the caller's
+   own, resolved from the JWT, never a client-supplied id. `TenantsService`
+   is the clearest example: there is no `GET /tenants/:id` to even attempt
+   cross-tenant access against. Prefer this whenever a resource is
+   naturally singular-per-tenant (a gym's own profile/settings, and later
+   things like a gym's own billing/subscription record).
+2. **"A record scoped to my tenant, looked up by id"** — for anything
+   staff manage on behalf of *other* records (users, and later members,
+   classes, bookings, ...). `UsersService.findByIdInTenant(tenantId, id)`
+   is the established convention: every by-id lookup includes `tenantId`
+   in its `where` clause and returns `404` — not `403` — for a real row
+   that belongs to a different tenant, so the response can't even confirm
+   the id exists elsewhere. Every future by-id lookup should follow this
+   exact name and behavior.
+
+What's still missing is a *shared, generic* enforcement mechanism — there's
+no single guard or query layer that can know "does resource X belong to
+tenant Y" without knowing what X is, so each new tenant-scoped service has
+to follow pattern 1 or 2 above deliberately rather than getting it for
+free. Worth revisiting with a Prisma Client extension (a `$extends` that
+auto-injects the tenant filter into pattern-2-style queries) now that
+three real services (`UsersService`, `TenantsService`, and the tenant
+lookups in `AuthService`) exist to prove the pattern against — a decision
+better made once a couple of real business modules (Members, Classes) are
+built and the shape of "a query that needs it" is less hypothetical.
 
 ### What's here / what's not
 
 **Here:** app bootstrap, configuration, database connection + migrations,
 the global error/response envelope, validation, security
-headers/CORS/rate-limiting, Swagger, a real health check, and the full
-identity/access-control layer — real registration, login, refresh, logout,
-password reset, staff invites, a clean `User` model, and role +
-configurable-permission authorization (guards, decorators, a permission
-service) that every future module authenticates and authorizes against.
+headers/CORS/rate-limiting, Swagger, a real health check, the full
+identity/access-control layer (registration, login, refresh, logout,
+password reset, staff invites, role + configurable-permission
+authorization), and the full gym/business layer — owner onboarding,
+business profile + settings, status lifecycle, and enforced multi-tenant
+isolation — that every future business module scopes its data to.
 
 **Not here, by design**: Members, Trainers (as business profiles beyond the
 `User` identity row — e.g. certifications, specialties), Leads,
 Memberships, Classes, Bookings, Attendance, Payments, Invoices,
-Notifications, Reports, Inventory/POS, Expenses, Settings, Audit/Activity —
-every one of these is a real business domain the frontend already has mock
-data and full UI for (see `../src/lib/data/*.ts` and `../README.md`'s
-project structure section), and each becomes its own Nest module
-(`module/`, `controller.ts`, `service.ts`, `dto/`) in a later phase, built
-on this foundation — each carrying its own `userId` FK back to the `User`
-table established here, rather than duplicating identity data.
+Notifications, Reports, Inventory/POS, Expenses, Audit/Activity, and any
+platform-level admin surface (for managing/suspending gyms across the
+whole platform — the `TenantStatus.SUSPENDED` state and its enforcement
+exist, but nothing can set it yet). Every one of the business domains is
+one the frontend already has mock data and full UI for (see
+`../src/lib/data/*.ts` and `../README.md`'s project structure section),
+and each becomes its own Nest module (`module/`, `controller.ts`,
+`service.ts`, `dto/`) in a later phase, built on this foundation — each
+carrying its own `tenantId` (following one of the two patterns in
+[Tenant isolation](#tenant-isolation)) and `userId` FKs back to the
+identity established here, rather than duplicating either.
 
 ## Development commands
 
@@ -450,10 +549,28 @@ table established here, rather than duplicating identity data.
   links are logged server-side (`AuthService`, dev-visible only) instead of
   emailed — a clearly-marked follow-up integration, not a gap in the token
   mechanism itself.
-- Tenant isolation is enforced in application code (every `UsersService`
-  query filters by `tenantId`) but is still a per-service convention, not a
-  shared guard/query extension that would make forgetting it impossible —
-  see [Tenant isolation](#tenant-isolation-a-deliberately-unfinished-story).
+- Tenant isolation is enforced in application code (`UsersService` and
+  `TenantsService` both follow one of the two documented patterns) but is
+  still a per-service convention, not a shared guard/query extension that
+  would make forgetting it impossible — see
+  [Tenant isolation](#tenant-isolation).
+- One email = one gym: `User.email` is globally unique, not per-tenant, so
+  the same person can't hold a login in two different gyms today (e.g. a
+  trainer who works at two locations). Revisiting this would mean a
+  real user↔tenant membership model instead of the current one-FK-per-user
+  one — a bigger shift than this phase's scope, and not something the
+  product brief for this phase asked for.
+- The public `/register` page has no gym-selector UI yet, so member
+  self-registration only works unambiguously while exactly one gym exists
+  on a given deployment (`tenantSlug` is accepted but nothing in the
+  frontend collects one yet) — real per-gym signup links are frontend work
+  for a later phase, once `POST /auth/register-business` has a UI in front
+  of it too.
+- No platform-level admin surface exists to set `TenantStatus.SUSPENDED` —
+  the enum value and its enforcement (`TenantStatusGuard`,
+  `AuthService.login`/`refresh`) are in place, but nothing can reach it
+  yet outside a direct database write (see the suspension test in
+  `test/tenants.e2e-spec.ts`).
 - No account lockout after repeated failed login attempts beyond the
   per-IP rate limit (`5/min` on `/auth/login`) — a per-account lockout/backoff
   is a reasonable next hardening step once there's usage data to tune it

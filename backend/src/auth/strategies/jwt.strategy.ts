@@ -28,9 +28,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
-    const user = await this.usersService.findById(payload.sub);
+    const user = await this.usersService.findByIdWithTenantStatus(payload.sub);
 
-    if (!user || user.deletedAt || user.status !== 'ACTIVE') {
+    if (!user || user.deletedAt || user.status !== 'ACTIVE' || user.tenant.deletedAt) {
       throw new UnauthorizedException('This account is no longer active.');
     }
 
@@ -39,6 +39,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       tenantId: user.tenantId,
       email: user.email,
       role: user.role,
+      // Not enforced here — see TenantStatusGuard, which can exempt specific
+      // routes (e.g. an owner reversing their own gym's pause) that a blanket
+      // rejection at this layer couldn't.
+      tenantStatus: user.tenant.status,
     };
   }
 }
