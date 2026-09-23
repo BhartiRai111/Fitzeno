@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
+import { MembersService } from '../members/members.service.js';
 import { toUserResponse, type UserResponseDto } from '../users/dto/user-response.dto.js';
 import { UserRole, UserStatus, TenantStatus } from '../generated/prisma/enums.js';
 import type { Prisma, Tenant, User } from '../generated/prisma/client.js';
@@ -49,6 +50,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly membersService: MembersService,
     private readonly passwordService: PasswordService,
     private readonly tokenService: TokenService,
     private readonly jwtService: JwtService,
@@ -69,6 +71,12 @@ export class AuthService {
       phone: dto.phone,
       role: UserRole.MEMBER,
     });
+
+    // If this gym already has a staff-added Member record with this email
+    // (a walk-in who's now creating their first portal login), link the two
+    // rather than leaving a disconnected duplicate — see the Member schema
+    // comment and MembersService.linkPendingPortalUser. A no-op otherwise.
+    await this.membersService.linkPendingPortalUser(tenant.id, user.email, user.id);
 
     return this.issueSession(user, meta);
   }

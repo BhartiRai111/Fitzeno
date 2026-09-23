@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { UsersModule } from '../users/users.module.js';
+import { MembersModule } from '../members/members.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { CredentialsModule } from './credentials.module.js';
@@ -32,6 +33,7 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
     }),
     CredentialsModule,
     UsersModule,
+    MembersModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

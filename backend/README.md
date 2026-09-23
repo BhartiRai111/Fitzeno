@@ -4,16 +4,15 @@ The backend for the Fitzeno gym management platform — a NestJS 12 service on
 PostgreSQL via Prisma, built to sit behind the existing Next.js frontend in
 `../src`.
 
-**Status:** identity, access-control, and multi-tenant gym/business
-management complete. On top of the app-bootstrap foundation (config,
-database, error/response envelope, security headers, Swagger) and the
-auth/authorization layer (register/login/refresh/logout, roles +
-configurable permissions), this phase adds the **Gym/Business workspace**
-itself — real owner onboarding (create a gym + its owner account in one
-step), a business profile + settings model, and enforced multi-tenant
-isolation — everything every future business module (members, classes,
-bookings, payments, ...) will scope its data to. No business-domain
-endpoints exist yet — see
+**Status:** identity, access-control, gym/business management, and the
+first real business domain — **Members & Leads/CRM** — complete. On top of
+auth/authorization (register/login, roles + configurable permissions) and
+the gym/business layer (owner onboarding, tenant isolation), this phase
+adds a gym's member roster and its lead pipeline: the full lead lifecycle
+from first contact through trial to conversion, and the resulting member
+record, without duplicating identity or creating disconnected data.
+Memberships, Classes, Bookings, Payments, and Attendance are still not
+implemented — see
 [What's here / What's not](#whats-here--whats-not) below.
 
 ## Stack
@@ -173,6 +172,11 @@ backend/
                             status/role, permission overrides
     tenants/                the current gym: profile, settings, status — see
                             Gym / business management
+    members/                the gym's member roster: profile, notes,
+                            portal self-access — see Members & Leads/CRM
+    leads/                  the lead/CRM pipeline: lifecycle, follow-ups,
+                            conversion — depends on members/ — see
+                            Members & Leads/CRM
     health/                 GET /api/v1/health
     generated/prisma/        Prisma's generated client (gitignored, regenerate
                             with `npm run prisma:generate`)
@@ -464,6 +468,107 @@ real, manageable business:
   `UsersController` uses for role changes — a business-wide lifecycle
   action isn't something a permission override should be able to grant.
 
+### Members & Leads/CRM
+
+The gym's actual roster, and the pipeline that feeds it — the full journey
+the product brief describes: *Lead → Contact → Follow-up → Trial → Gym
+Visit → Conversion → Member*.
+
+**`Member` vs `User` — two layers, on purpose.** `User` (from the auth
+phase) is a login identity; `Member` (`members/`, new this phase) is a
+gym's business record of a person — contact details, emergency contact,
+assigned trainer, join date, status, notes. A `Member` never *requires* a
+`User`: front-desk staff routinely add a walk-in's details long before (or
+instead of) that person ever creating portal credentials. The link
+(`Member.userId`, nullable, unique) is one-directional and optional, and
+gets made automatically rather than through a separate step: when someone
+registers for the member portal (`POST /auth/register`) and a `Member` row
+in that tenant already has a matching email with no `userId` yet,
+`AuthService.register()` links the two (`MembersService.linkPendingPortalUser`)
+instead of leaving a disconnected duplicate. A `Member` with no `User` is
+a completely normal, fully-functional state, not a half-finished one.
+
+**Member status vs membership status — a real distinction, not just
+naming.** `Member.status` (`ACTIVE` / `INACTIVE` / `CANCELLED`) describes
+whether this person is a recognized member of the gym at all. It is
+deliberately *not* the same enum as a future `MembershipStatus` (trial /
+active / expiring / expired / frozen / cancelled), which will describe a
+*paid plan's* state once the Memberships module exists. A member can — and
+routinely does — exist with no active membership: a lead converted today
+whose first payment hasn't been recorded yet, someone between plans, or a
+lapsed member the gym hasn't formally cancelled. `Member` carries no
+plan/payment/attendance data itself; each of those is a later module's own
+table with its own `memberId` FK back here, exactly like `User`'s own
+header comment describes for business-specific profile data.
+
+**Lead lifecycle** (`LeadStatus`): `NEW → CONTACTED → FOLLOW_UP →
+TRIAL_SCHEDULED → TRIAL_COMPLETED → CONVERTED`, with `LOST` as a
+terminal-but-reversible side exit. Transitions are **not** enforced as a
+strict state machine — a walk-in can go `NEW → CONVERTED` the same day, a
+`FOLLOW_UP` can follow a postponed trial back from `TRIAL_SCHEDULED` — real
+sales cycles don't fit a rigid funnel, and the brief explicitly asked not
+to force one. The one transition that *is* locked down: `PATCH /leads/:id`
+cannot set `status: CONVERTED` (the DTO's allowed values exclude it
+entirely) and a lead that has already converted rejects further edits —
+conversion only happens through `POST /leads/:id/convert`, which is also
+what creates or links the `Member`, so a lead can never show `CONVERTED`
+with nothing on the other end of it.
+
+**Follow-ups** live as plain fields on `Lead` (`nextFollowUpAt`,
+`assignedToId`) rather than a separate entity — a lead only ever has one
+"next" follow-up at a time, so a dedicated table would just be `Lead`'s own
+columns with extra indirection. *"Which leads need attention today?"* is
+`GET /leads?followUpDueBy=<date>` — leads whose next follow-up is due or
+overdue, automatically excluding anything already `CONVERTED`/`LOST`
+unless an explicit `status` filter says otherwise.
+
+**Trials** are a timestamp and a notes field on `Lead`
+(`trialScheduledAt`, `trialNotes`) — deliberately not a foreign key into a
+Class/Booking row, since neither exists yet. Building that FK now would
+risk a second, conflicting source of truth once the Bookings module lands;
+that module is free to link a real `Booking` back to the `Lead` (or the
+`Member` it becomes) however it sees fit, without `Lead` needing to
+change.
+
+**Conversion** (`POST /leads/:id/convert`, `LeadsService.convert`) is one
+transaction: create-or-link the `Member`, then mark the `Lead` `CONVERTED`
+with a timestamp. "Create-or-link" is the mechanism that satisfies *avoid
+creating unnecessary duplicate person records* — if a `Member` with the
+same email already exists in the tenant (e.g. this person was already
+added as a walk-in before this old lead got processed), that record is
+linked (`Member.convertedFromLeadId`) instead of a second one being
+created. The lead's source/interest/notes stay reachable through that
+relation rather than being copied onto `Member` — one place they're
+stored, not two. An optional `trainerId`/`joinedOn` on the convert request
+lets staff assign a trainer and set a join date at the moment of
+conversion.
+
+**Authorization** reuses the `MEMBERS` `PermissionArea` unchanged for
+*both* controllers — the approved frontend already groups "Member
+profiles, contact info, and lead follow-up" under one area
+(`src/lib/permissions.ts`), so `MembersController` and `LeadsController`
+are both gated on it rather than inventing a second one. On top of that,
+one role-scoping rule applies to both: a `TRAINER` — whose role
+description is "no access to business-wide data" — only ever sees members
+assigned to them (`Member.trainerId`) or leads assigned to them
+(`Lead.assignedToId`), regardless of any filter they pass; reading a
+record outside that scope by id is a `403`, distinct from the `404` a
+genuine cross-tenant lookup gets. This is a role-based scoping rule, not a
+permission level, so it applies independent of any permission override —
+see `MembersService.applyTrainerScope`/`assertTrainerCanAccess` and
+`LeadsService`'s equivalents. A portal `MEMBER` has `NONE` on the
+`MEMBERS` area like every other non-staff area, so `GET /members` and
+`GET /leads` are closed to them entirely — their own data comes from
+`GET /members/me` instead, which needs no permission at all since it's
+always the caller's own record.
+
+`trainerId` (on `Member`) and `assignedToId` (on `Lead`) are validated
+against `UsersService.findByIdInTenant` before being written — both must
+resolve to a real user in the *same* tenant (a cross-tenant id 404s, same
+as anywhere else), and `trainerId` specifically must belong to a
+`TRAINER`-role user, `assignedToId` to any staff role (not a portal
+`MEMBER`).
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -480,50 +585,60 @@ this codebase so far, and are meant to be the only two future modules need:
    naturally singular-per-tenant (a gym's own profile/settings, and later
    things like a gym's own billing/subscription record).
 2. **"A record scoped to my tenant, looked up by id"** — for anything
-   staff manage on behalf of *other* records (users, and later members,
-   classes, bookings, ...). `UsersService.findByIdInTenant(tenantId, id)`
-   is the established convention: every by-id lookup includes `tenantId`
-   in its `where` clause and returns `404` — not `403` — for a real row
-   that belongs to a different tenant, so the response can't even confirm
-   the id exists elsewhere. Every future by-id lookup should follow this
-   exact name and behavior.
+   staff manage on behalf of *other* records: users, members, leads, and
+   later classes, bookings, ... `UsersService.findByIdInTenant(tenantId, id)`
+   is the established convention, now followed by three services
+   (`UsersService`, `MembersService`, `LeadsService`): every by-id lookup
+   includes `tenantId` in its `where` clause and returns `404` — not
+   `403` — for a real row that belongs to a different tenant, so the
+   response can't even confirm the id exists elsewhere. Every future
+   by-id lookup should follow this exact name and behavior.
 
-What's still missing is a *shared, generic* enforcement mechanism — there's
-no single guard or query layer that can know "does resource X belong to
-tenant Y" without knowing what X is, so each new tenant-scoped service has
-to follow pattern 1 or 2 above deliberately rather than getting it for
-free. Worth revisiting with a Prisma Client extension (a `$extends` that
-auto-injects the tenant filter into pattern-2-style queries) now that
-three real services (`UsersService`, `TenantsService`, and the tenant
-lookups in `AuthService`) exist to prove the pattern against — a decision
-better made once a couple of real business modules (Members, Classes) are
-built and the shape of "a query that needs it" is less hypothetical.
+Members and Leads add one more wrinkle beyond tenant isolation: a
+**within-tenant** scoping rule for the `TRAINER` role (see Members &
+Leads/CRM above) — a trainer's own gym's data, further narrowed to just
+what's assigned to them. It uses the same `403`-for-out-of-scope,
+`404`-for-out-of-tenant distinction, layered on top of pattern 2 rather
+than replacing it.
+
+What's still missing is a *shared, generic* tenant-isolation enforcement
+mechanism — there's no single guard or query layer that can know "does
+resource X belong to tenant Y" without knowing what X is, so each new
+tenant-scoped service has to follow pattern 1 or 2 above deliberately
+rather than getting it for free. Worth revisiting with a Prisma Client
+extension (a `$extends` that auto-injects the tenant filter into
+pattern-2-style queries) now that four real services
+(`UsersService`, `TenantsService`, `MembersService`, `LeadsService`) exist
+to prove the pattern against.
 
 ### What's here / what's not
 
 **Here:** app bootstrap, configuration, database connection + migrations,
 the global error/response envelope, validation, security
 headers/CORS/rate-limiting, Swagger, a real health check, the full
-identity/access-control layer (registration, login, refresh, logout,
-password reset, staff invites, role + configurable-permission
-authorization), and the full gym/business layer — owner onboarding,
-business profile + settings, status lifecycle, and enforced multi-tenant
-isolation — that every future business module scopes its data to.
+identity/access-control layer, the full gym/business layer (owner
+onboarding, business profile + settings, status lifecycle, enforced
+multi-tenant isolation), and the first real business domain — **Members**
+(roster, profile/notes, portal self-access, trainer assignment/scoping)
+and **Leads/CRM** (lifecycle, follow-ups, trial scheduling, conversion
+into a Member with no duplicate records).
 
-**Not here, by design**: Members, Trainers (as business profiles beyond the
-`User` identity row — e.g. certifications, specialties), Leads,
-Memberships, Classes, Bookings, Attendance, Payments, Invoices,
+**Not here, by design**: Trainers/Staff as richer business profiles beyond
+the `User` identity row (certifications, specialties — a Trainer today is
+just a `User` with `role: TRAINER`), Memberships (plans, renewals,
+freezes, payments — `Member` deliberately carries none of this), Classes,
+Bookings (a lead's trial is a timestamp on `Lead`, not a real booking —
+see Members & Leads/CRM above), Attendance, Payments, Invoices,
 Notifications, Reports, Inventory/POS, Expenses, Audit/Activity, and any
-platform-level admin surface (for managing/suspending gyms across the
-whole platform — the `TenantStatus.SUSPENDED` state and its enforcement
-exist, but nothing can set it yet). Every one of the business domains is
-one the frontend already has mock data and full UI for (see
-`../src/lib/data/*.ts` and `../README.md`'s project structure section),
-and each becomes its own Nest module (`module/`, `controller.ts`,
-`service.ts`, `dto/`) in a later phase, built on this foundation — each
-carrying its own `tenantId` (following one of the two patterns in
-[Tenant isolation](#tenant-isolation)) and `userId` FKs back to the
-identity established here, rather than duplicating either.
+platform-level admin surface (the `TenantStatus.SUSPENDED` state and its
+enforcement exist, but nothing can set it yet). Every one of these is a
+real business domain the frontend already has mock data and full UI for
+(see `../src/lib/data/*.ts` and `../README.md`'s project structure
+section), and each becomes its own Nest module in a later phase, built on
+this foundation — each carrying its own `tenantId` (following one of the
+patterns in [Tenant isolation](#tenant-isolation)) and `memberId`/`userId`
+FKs back to the identity/member records established here, rather than
+duplicating any of them.
 
 ## Development commands
 
@@ -549,10 +664,10 @@ identity established here, rather than duplicating either.
   links are logged server-side (`AuthService`, dev-visible only) instead of
   emailed — a clearly-marked follow-up integration, not a gap in the token
   mechanism itself.
-- Tenant isolation is enforced in application code (`UsersService` and
-  `TenantsService` both follow one of the two documented patterns) but is
-  still a per-service convention, not a shared guard/query extension that
-  would make forgetting it impossible — see
+- Tenant isolation is enforced in application code (`UsersService`,
+  `TenantsService`, `MembersService`, `LeadsService` each follow one of the
+  documented patterns) but is still a per-service convention, not a shared
+  guard/query extension that would make forgetting it impossible — see
   [Tenant isolation](#tenant-isolation).
 - One email = one gym: `User.email` is globally unique, not per-tenant, so
   the same person can't hold a login in two different gyms today (e.g. a
@@ -585,3 +700,16 @@ identity established here, rather than duplicating either.
   release.
 - Soft-delete (`deletedAt`) is a schema convention, not yet enforced by a
   query filter — nothing currently reads it.
+- Member/Lead search (`search=`) uses a plain `contains`/ILIKE match, same
+  as `UsersService.list()` — fine at today's scale, but not a real
+  full-text index; worth a `pg_trgm` index (or equivalent) once a gym's
+  member count makes it worth measuring.
+- No dedicated audit/activity log yet — `MembersService`/`LeadsService`
+  keep each meaningful action (create, status change, conversion, note) in
+  its own single-purpose method specifically so a future notifications or
+  audit module has a clean place to hook in, but nothing emits an event or
+  writes a log entry today.
+- A `Member`'s `trainerId` is a single assignment, not a history — changing
+  it overwrites the previous value with no record of who trained this
+  member before. Worth revisiting if "trainer history" becomes a real
+  product need.

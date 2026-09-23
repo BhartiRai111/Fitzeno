@@ -97,6 +97,8 @@ model Tenant {
 
   users    User[]
   settings TenantSettings?
+  members  Member[]
+  leads    Lead[]
 
   @@map("tenants")
 }
@@ -190,6 +192,16 @@ model User {
   permissionOverrides PermissionOverride[]
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+
+  /// The member profile linked to this login, if this user has one — see
+  /// Member's own comment for why the link is optional and one-directional.
+  member              Member?      @relation("MemberPortalUser")
+  /// Members this user coaches (only meaningful when role = TRAINER, but not
+  /// DB-enforced — see MembersService.assertValidTrainer for the app-level check).
+  membersAsTrainer    Member[]     @relation("MemberTrainer")
+  assignedLeads       Lead[]       @relation("LeadAssignee")
+  memberNotesAuthored MemberNote[]
+  leadNotesAuthored   LeadNote[]
 
   @@index([tenantId])
   @@index([tenantId, role])
@@ -288,4 +300,236 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+/// ACTIVE — a current, recognized member of the gym.
+/// INACTIVE — no longer engaged (hasn't renewed, gone quiet) but the record
+///   is kept, not closed — reversible with no special process.
+/// CANCELLED — the relationship has formally ended (their choice or the
+///   gym's). Kept for history, same as every other soft-managed status in
+///   this schema; nothing currently re-activates a cancelled member
+///   automatically.
+/// Deliberately NOT the same enum as a future MembershipStatus (trial /
+/// active / expiring / expired / frozen / cancelled) — that describes a
+/// PAID PLAN's state and belongs to the Memberships module a later phase
+/// adds; a member can exist here with no active membership at all (lapsed,
+/// between plans, or never purchased one — e.g. a lead converted today
+/// whose first payment hasn't been recorded yet). Conflating the two was
+/// flagged explicitly as a modeling mistake to avoid.
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  CANCELLED
+
+  @@map("member_status")
+}
+
+// ---------------------------------------------------------------------------
+// Member — a gym member's business profile: the "who they are to this gym"
+// layer, separate from the "how they log in" layer (User). A Member is
+// NEVER required to have a login — front-desk staff routinely add a walk-in
+// member's name/contact/emergency info long before (or instead of) that
+// person ever creating portal credentials. `userId` is therefore optional
+// and one-directional (Member -> User, never the reverse as a hard
+// requirement): when a matching person later registers for the member
+// portal, AuthService.register() links the two by email rather than
+// creating a second, disconnected identity — see its own comment.
+//
+// Deliberately carries no membership-plan/payment/attendance/booking data
+// — those are each a later module's own table with its own `memberId` FK
+// back here, exactly like User's own header comment describes for
+// business-specific profile data. This is the stable join point they'll
+// all hang off, not a place to grow ad hoc columns for whatever the
+// frontend currently renders.
+// ---------------------------------------------------------------------------
+model Member {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Optional, unique — at most one Member per login, and a Member need not
+  /// have one at all. SetNull (not Cascade): deleting/disabling the login
+  /// must never delete the gym's own record of this person.
+  userId String? @unique @map("user_id")
+  user   User?   @relation("MemberPortalUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Own columns, not sourced live from User — see the model comment. When
+  /// userId is linked, MembersService keeps these in sync going forward
+  /// rather than joining through User on every read.
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  email     String?
+  phone     String?
+
+  /// Free text, not a closed enum — a member's own words, not a system state.
+  gender                 String?
+  dateOfBirth             DateTime? @map("date_of_birth")
+  addressLine             String?   @map("address_line")
+  emergencyContactName    String?   @map("emergency_contact_name")
+  emergencyContactPhone   String?   @map("emergency_contact_phone")
+
+  status   MemberStatus @default(ACTIVE)
+  /// Member-since date — distinct from createdAt, which is when this ROW was
+  /// created (e.g. backfilled data, or a conversion recorded after the fact).
+  joinedOn DateTime     @default(now()) @map("joined_on")
+
+  trainerId String? @map("trainer_id")
+  trainer   User?   @relation("MemberTrainer", fields: [trainerId], references: [id], onDelete: SetNull)
+
+  /// Set when this member was created via lead conversion (LeadsService) —
+  /// the provenance link. A member created directly by staff (no lead
+  /// involved) simply has this null. The Lead's own source/interest/notes
+  /// stay reachable through this relation rather than being copied onto
+  /// Member, so there's exactly one place they're stored.
+  convertedFromLeadId String? @unique @map("converted_from_lead_id")
+  convertedFromLead   Lead?   @relation("LeadConversion", fields: [convertedFromLeadId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  notes MemberNote[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, trainerId])
+  @@map("members")
+}
+
+// ---------------------------------------------------------------------------
+// MemberNote / LeadNote — free-text, independently authored/timestamped
+// entries that accumulate over a member's or lead's lifetime. Real tables,
+// not a JSON array column like TenantSettings uses: each entry has its own
+// author and timestamp and is appended one at a time, never replaced as a
+// whole document — the opposite access pattern from the settings blobs,
+// so the JSON-column reasoning that fit there doesn't apply here.
+// ---------------------------------------------------------------------------
+model MemberNote {
+  id       String @id @default(uuid())
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  authorId String? @map("author_id")
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body     String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@map("member_notes")
+}
+
+/// NEW -> CONTACTED -> FOLLOW_UP -> TRIAL_SCHEDULED -> TRIAL_COMPLETED ->
+/// CONVERTED is the typical path, but transitions are NOT enforced as a
+/// strict state machine (a walk-in can go NEW -> CONVERTED same day; a
+/// FOLLOW_UP can bounce back from TRIAL_SCHEDULED if a trial gets
+/// postponed) — real gym sales cycles don't fit a rigid funnel. LOST is a
+/// terminal-but-reversible dead end (a lost lead can be reopened into
+/// FOLLOW_UP later). CONVERTED is the one truly one-way transition — it
+/// only happens through LeadsService.convert(), never a plain status PATCH,
+/// because it also creates (or links) the Member record; see LeadsService.
+enum LeadStatus {
+  NEW
+  CONTACTED
+  FOLLOW_UP
+  TRIAL_SCHEDULED
+  TRIAL_COMPLETED
+  CONVERTED
+  LOST
+
+  @@map("lead_status")
+}
+
+/// Mirrors the approved frontend's LeadSource union (src/lib/data/types.ts)
+/// plus OTHER, for real-world data entry the closed frontend set doesn't
+/// anticipate — purely additive, so it doesn't conflict with that set.
+enum LeadSource {
+  WEBSITE
+  INSTAGRAM
+  REFERRAL
+  WALK_IN
+  ADVERTISEMENT
+  OTHER
+
+  @@map("lead_source")
+}
+
+enum LeadLostReason {
+  NO_RESPONSE
+  NOT_INTERESTED
+  PRICE
+  CHOSE_ANOTHER_GYM
+  BAD_TIMING
+  OTHER
+
+  @@map("lead_lost_reason")
+}
+
+// ---------------------------------------------------------------------------
+// Lead — a potential member who hasn't (yet) converted. Intentionally
+// carries no membership/payment fields (those belong to Member, once
+// conversion happens) and no FK to a Class/Booking row — the Classes/
+// Bookings module doesn't exist yet, and inventing one now would risk a
+// second, conflicting source of truth once it's built. `trialScheduledAt`
+// is a plain timestamp for that reason: enough for "this lead has a trial
+// booked and when," with the eventual Bookings module free to link a real
+// Booking row back to this Lead (or to the resulting Member) however it
+// sees fit, without Lead needing to change.
+// ---------------------------------------------------------------------------
+model Lead {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  email     String?
+  phone     String?
+
+  source   LeadSource
+  /// Free text — what they're interested in (e.g. "Weight loss", "PT sessions").
+  interest String?
+
+  status     LeadStatus      @default(NEW)
+  lostReason LeadLostReason? @map("lost_reason")
+
+  assignedToId String? @map("assigned_to_id")
+  assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /// Drives the "which leads need attention today" query — see
+  /// LeadsService.list's followUpDueBy filter.
+  nextFollowUpAt   DateTime? @map("next_follow_up_at")
+  trialScheduledAt DateTime? @map("trial_scheduled_at")
+  trialNotes       String?   @map("trial_notes")
+
+  /// Set once, by LeadsService.convert() only — see LeadStatus's comment.
+  convertedAt     DateTime? @map("converted_at")
+  convertedMember Member?   @relation("LeadConversion")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  notes LeadNote[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, assignedToId])
+  @@index([tenantId, nextFollowUpAt])
+  @@map("leads")
+}
+
+model LeadNote {
+  id     String @id @default(uuid())
+  leadId String @map("lead_id")
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  authorId String? @map("author_id")
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body     String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([leadId])
+  @@map("lead_notes")
 }

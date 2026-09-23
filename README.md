@@ -30,7 +30,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - `/owner` — owner/admin dashboard
 - `/portal` — member portal
 
-The backend (`backend/`) is not wired into these pages yet — the frontend still runs entirely on the realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly. See `backend/README.md` for the current state of the API: authentication, user management, role/permission authorization, and multi-tenant gym/business management (owner onboarding, gym profile/settings, enforced tenant isolation) are implemented and tested, but no business endpoints (members, classes, payments, ...) exist yet, so there's nothing to point this frontend at until a later phase.
+The backend (`backend/`) is not wired into these pages yet — the frontend still runs entirely on the realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly. See `backend/README.md` for the current state of the API: authentication, user management, role/permission authorization, multi-tenant gym/business management, and a Members/Leads-CRM domain (member roster, lead lifecycle, trial scheduling, and lead-to-member conversion) are implemented and tested, but Memberships/Classes/Bookings/Payments/Attendance don't exist yet, so there's nothing to point most of this frontend at until later phases.
 
 ## Project structure
 

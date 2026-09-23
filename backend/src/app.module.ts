@@ -19,6 +19,8 @@ import { RolesGuard } from './common/guards/roles.guard.js';
 import { TenantStatusGuard } from './common/guards/tenant-status.guard.js';
 import { PermissionsGuard } from './authz/permissions.guard.js';
 import { TenantsModule } from './tenants/tenants.module.js';
+import { MembersModule } from './members/members.module.js';
+import { LeadsModule } from './leads/leads.module.js';
 
 @Module({
   imports: [
@@ -43,6 +45,8 @@ import { TenantsModule } from './tenants/tenants.module.js';
     AuthModule,
     AuthzModule,
     TenantsModule,
+    MembersModule,
+    LeadsModule,
     HealthModule,
   ],
   providers: [

@@ -7,6 +7,7 @@ import type { PasswordService } from './password.service.js';
 import type { TokenService } from './token.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { UsersService } from '../users/users.service.js';
+import type { MembersService } from '../members/members.service.js';
 import type { Tenant, User } from '../generated/prisma/client.js';
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -52,6 +53,7 @@ function makeUserWithTenant(
 describe('AuthService', () => {
   let prisma: PrismaService;
   let usersService: UsersService;
+  let membersService: MembersService;
   let passwordService: PasswordService;
   let tokenService: TokenService;
   let jwtService: JwtService;
@@ -95,6 +97,10 @@ describe('AuthService', () => {
       touchLastLogin: vi.fn().mockResolvedValue(undefined),
     } as unknown as UsersService;
 
+    membersService = {
+      linkPendingPortalUser: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MembersService;
+
     passwordService = {
       hash: vi.fn().mockResolvedValue('hashed-password'),
       compare: vi.fn(),
@@ -111,7 +117,15 @@ describe('AuthService', () => {
       get: vi.fn((key: string) => configValues[key]),
     } as unknown as ConfigService;
 
-    service = new AuthService(prisma, usersService, passwordService, tokenService, jwtService, configService);
+    service = new AuthService(
+      prisma,
+      usersService,
+      membersService,
+      passwordService,
+      tokenService,
+      jwtService,
+      configService,
+    );
   });
 
   describe('register', () => {
