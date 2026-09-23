@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { UserPlus, UserRoundPlus, CreditCard, CalendarPlus, UserCog, Wallet, Megaphone, ShoppingBag } from "lucide-react";
+import { UserPlus, UserRoundPlus, CreditCard, CalendarPlus, UserCog, Wallet, Megaphone, ShoppingBag, PiggyBank } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { AddMemberDialog } from "@/components/dashboard/dialogs/add-member-dialog";
 import { AddLeadDialog } from "@/components/dashboard/dialogs/add-lead-dialog";
@@ -23,7 +23,7 @@ export function QuickActions() {
   return (
     <Card className="p-4 sm:p-5">
       <h3 className="mb-3 font-display text-sm font-semibold text-foreground">Quick actions</h3>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-9">
         <AddMemberDialog trigger={<ActionTrigger icon={UserPlus} label="Add Member" />} />
         <AddLeadDialog trigger={<ActionTrigger icon={UserRoundPlus} label="Add Lead" />} />
         <Link href="/owner/memberships" className={actionClasses}>
@@ -42,6 +42,10 @@ export function QuickActions() {
         <Link href="/owner/store?tab=pos" className={actionClasses}>
           <ShoppingBag className="size-[18px] text-primary" />
           <span className="text-xs font-medium text-foreground">New Sale</span>
+        </Link>
+        <Link href="/owner/finances?tab=expenses" className={actionClasses}>
+          <PiggyBank className="size-[18px] text-primary" />
+          <span className="text-xs font-medium text-foreground">Record Expense</span>
         </Link>
         <SendNotificationDialog trigger={<ActionTrigger icon={Megaphone} label="Notify" />} />
       </div>

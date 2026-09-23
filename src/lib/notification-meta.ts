@@ -11,6 +11,7 @@ import {
   Tag,
   Sparkles,
   PackageSearch,
+  Receipt,
   type LucideIcon,
 } from "lucide-react";
 import type { NotificationCategory, NotificationPriority } from "@/lib/data/types";
@@ -34,6 +35,7 @@ export const CATEGORY_META: Record<NotificationCategory, CategoryMeta> = {
   promotion: { label: "Offers", icon: Tag, className: "bg-primary/10 text-primary" },
   system: { label: "Updates", icon: Sparkles, className: "bg-accent text-accent-foreground" },
   inventory: { label: "Inventory", icon: PackageSearch, className: "bg-warning-tint text-warning" },
+  expense: { label: "Expenses", icon: Receipt, className: "bg-danger-tint text-danger" },
 };
 
 export const PRIORITY_META: Record<NotificationPriority, { label: string; dotClassName: string; badgeClassName: string }> = {

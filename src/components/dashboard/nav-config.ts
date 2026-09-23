@@ -17,6 +17,7 @@ import {
   UserCircle,
   CalendarClock,
   ShoppingBag,
+  PiggyBank,
 } from "lucide-react";
 
 export interface NavItem {
@@ -55,6 +56,7 @@ export const ownerNavSections: NavSection[] = [
     title: "Finance",
     items: [
       { label: "Payments & Billing", href: "/owner/payments", icon: Wallet },
+      { label: "Finances", href: "/owner/finances", icon: PiggyBank },
       { label: "Reports & Analytics", href: "/owner/reports", icon: BarChart3 },
     ],
   },

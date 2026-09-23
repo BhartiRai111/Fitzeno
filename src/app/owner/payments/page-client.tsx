@@ -3,7 +3,8 @@
 import * as React from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Wallet, Clock, XCircle, RotateCcw, Receipt } from "lucide-react";
+import Link from "next/link";
+import { Search, Wallet, Clock, XCircle, RotateCcw, Receipt, PiggyBank } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Card } from "@/components/ui/card";
@@ -151,7 +152,17 @@ export function PaymentsPageClient() {
       <PageHeader
         title="Payments & Billing"
         description="Transactions, invoices, and billing health"
-        actions={<RecordPaymentDialog onRecord={handleRecord} />}
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/owner/finances">
+                <PiggyBank className="size-4" />
+                View Finances
+              </Link>
+            </Button>
+            <RecordPaymentDialog onRecord={handleRecord} />
+          </>
+        }
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

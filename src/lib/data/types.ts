@@ -33,6 +33,7 @@ export type PermissionArea =
   | "memberships"
   | "payments"
   | "store"
+  | "finance"
   | "reports"
   | "staff"
   | "announcements"
@@ -163,7 +164,8 @@ export type NotificationCategory =
   | "announcement"
   | "promotion"
   | "system"
-  | "inventory";
+  | "inventory"
+  | "expense";
 
 export type NotificationPriority = "high" | "medium" | "low";
 
@@ -341,4 +343,42 @@ export interface StoreSale {
   soldBy: string;
   date: string;
   time: string;
+}
+
+// ---------------------------------------------------------------------------
+// Expenses / Financial overview
+// ---------------------------------------------------------------------------
+
+export type ExpenseCategory =
+  | "Rent"
+  | "Salaries"
+  | "Utilities"
+  | "Marketing"
+  | "Software"
+  | "Maintenance"
+  | "Cleaning"
+  | "Equipment"
+  | "Supplies"
+  | "Other";
+
+export type ExpenseStatus = "paid" | "pending" | "cancelled";
+export type ExpenseFrequency = "one-time" | "monthly" | "quarterly" | "yearly";
+
+export interface Expense {
+  id: string;
+  reference: string;
+  title: string;
+  category: ExpenseCategory;
+  amount: number;
+  /** Date the expense was incurred/recorded. */
+  date: string;
+  /** For pending expenses — when payment is due. */
+  dueDate?: string;
+  status: ExpenseStatus;
+  recurring: boolean;
+  frequency: ExpenseFrequency;
+  paymentMethod: "Card" | "Bank Transfer" | "Cash" | "UPI";
+  vendor?: string;
+  notes?: string;
+  recordedBy: string;
 }

@@ -9,6 +9,7 @@ import {
   TrendingUp,
   Plus,
   ShoppingBag,
+  PiggyBank,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
@@ -43,6 +44,8 @@ import { attendanceRecords, weeklyAttendance } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
 import { products } from "@/lib/data/products";
 import { getLowStockProducts } from "@/lib/store-helpers";
+import { expenses } from "@/lib/data/expenses";
+import { getPendingExpenses } from "@/lib/finance-helpers";
 import { recentActivity } from "@/lib/data/activity";
 import { formatCurrency, formatDate, daysBetween } from "@/lib/utils-data";
 import { percentTrend } from "@/lib/reports-helpers";
@@ -87,6 +90,7 @@ export default function OwnerOverviewPage() {
     (l) => l.nextFollowUp && l.nextFollowUp <= TODAY && l.status !== "converted" && l.status !== "lost"
   );
   const lowStockProducts = getLowStockProducts(products);
+  const pendingExpenses = getPendingExpenses(expenses);
 
   const rawAlerts: AlertItem[] = [
     {
@@ -131,6 +135,12 @@ export default function OwnerOverviewPage() {
       message: `${lowStockProducts.length} store products need restocking`,
       href: "/owner/store?tab=inventory",
     },
+    {
+      id: "a8",
+      severity: "low",
+      message: `${pendingExpenses.length} expenses awaiting payment`,
+      href: "/owner/finances?tab=expenses&status=pending",
+    },
   ];
   const alerts = rawAlerts.filter((a) => !a.message.startsWith("0"));
 
@@ -170,6 +180,12 @@ export default function OwnerOverviewPage() {
                 <Link href="/owner/store?tab=pos">
                   <ShoppingBag />
                   New Sale
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/owner/finances?tab=expenses">
+                  <PiggyBank />
+                  Record Expense
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
