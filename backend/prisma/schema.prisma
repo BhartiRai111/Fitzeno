@@ -1,8 +1,11 @@
 // Fitzeno backend — Prisma schema
 //
-// This phase establishes only the foundation-level schema: the tenant
-// (business/gym) boundary and the user/identity model every future business
-// module (members, staff, classes, payments, ...) will hang off of.
+// Phase 1 (Tenant/User foundation) + Phase 2 (this one: Auth, Users, Roles &
+// Permissions) — the identity and access-control layer every future business
+// module builds on. No business-domain tables (members, classes, payments,
+// ...) yet — those are later phases, and they'll each carry their own
+// `userId` FK back to the identity established here rather than duplicating
+// it.
 //
 // Conventions used throughout this schema, for every future model to follow:
 //   - `id` is a UUID (`@default(uuid())`), never an auto-increment integer,
@@ -11,9 +14,11 @@
 //   - `deletedAt` nullable timestamp for soft deletion on records an owner
 //     might restore (never hard-delete business/financial history).
 //   - Tenant-scoped tables carry a `tenantId` foreign key + index so every
-//     query can (and, once query middleware lands, must) filter by tenant.
-//   - snake_case column/table names in the database via @@map / @map, camelCase
-//     in the generated client — keeps SQL idiomatic while TS stays idiomatic.
+//     query can (and, as of this phase, must — see UsersService) filter by
+//     tenant.
+//   - snake_case column/table names in the database via @map/@@map,
+//     camelCase in the generated client — keeps SQL idiomatic while the
+//     application code stays idiomatic TS.
 
 generator client {
   provider = "prisma-client"
@@ -27,8 +32,9 @@ datasource db {
 // ---------------------------------------------------------------------------
 // Tenant — one row per gym/business using the platform. Every tenant-owned
 // table below carries a tenantId so one gym's data is never reachable from
-// another's request context (enforced in application code by a tenant guard
-// in a later phase; the column + index is the schema-level half of that).
+// another's request context. This phase starts actually enforcing that in
+// application code (every UsersService query filters by tenantId) rather
+// than just carrying the column, per the foundation phase's README note.
 // ---------------------------------------------------------------------------
 model Tenant {
   id        String    @id @default(uuid())
@@ -47,8 +53,7 @@ model Tenant {
 
 /// Mirrors the frontend's StaffAccessRole ("owner" | "manager" | "trainer" |
 /// "front-desk") plus MEMBER for member-portal accounts, which the frontend
-/// currently models separately (Member) but will need a login identity for
-/// once the Member Portal is wired to real auth.
+/// currently models separately (Member) but needs a login identity for here.
 enum UserRole {
   OWNER
   MANAGER
@@ -59,6 +64,12 @@ enum UserRole {
   @@map("user_role")
 }
 
+/// ACTIVE — normal login access.
+/// INVITED — a staff account created by an owner/manager via the invite
+///   flow, with no password set yet; can only complete setup via the
+///   invite's password-reset-style token, not log in directly.
+/// INACTIVE — access revoked (former staff, or an owner-initiated
+///   suspension); login is blocked with a clear, non-enumerating message.
 enum UserStatus {
   ACTIVE
   INVITED
@@ -81,6 +92,7 @@ model User {
   passwordHash String     @map("password_hash")
   firstName    String     @map("first_name")
   lastName     String     @map("last_name")
+  phone        String?
   role         UserRole
   status       UserStatus @default(ACTIVE)
   lastLoginAt  DateTime?  @map("last_login_at")
@@ -88,7 +100,105 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at")
   deletedAt    DateTime?  @map("deleted_at")
 
+  permissionOverrides PermissionOverride[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
   @@index([tenantId])
   @@index([tenantId, role])
   @@map("users")
+}
+
+/// Mirrors the frontend's PermissionArea union 1:1 (src/lib/data/types.ts).
+enum PermissionArea {
+  MEMBERS
+  BOOKINGS
+  ATTENDANCE
+  MEMBERSHIPS
+  PAYMENTS
+  STORE
+  FINANCE
+  REPORTS
+  STAFF
+  ANNOUNCEMENTS
+  SETTINGS
+
+  @@map("permission_area")
+}
+
+/// Mirrors the frontend's PermissionLevel union 1:1.
+enum PermissionLevel {
+  NONE
+  VIEW
+  MANAGE
+
+  @@map("permission_level")
+}
+
+// ---------------------------------------------------------------------------
+// PermissionOverride — per-user exceptions to their role's default
+// permissions (src/lib/permissions.ts's ROLE_DEFAULT_PERMISSIONS on the
+// frontend, mirrored server-side in authz/role-permissions.const.ts). A user
+// with no rows here just gets their role's defaults; effective permissions
+// are role-defaults merged with these overrides, computed at request time
+// by PermissionsService rather than stored redundantly per-area-per-user.
+// ---------------------------------------------------------------------------
+model PermissionOverride {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area      PermissionArea
+  level     PermissionLevel
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  @@unique([userId, area])
+  @@map("permission_overrides")
+}
+
+// ---------------------------------------------------------------------------
+// RefreshToken — one row per issued refresh token, so logout and password
+// changes can actually revoke access instead of waiting out a stateless
+// token's lifetime. Only a SHA-256 hash of the token is stored — the raw
+// value exists only in the httpOnly cookie on the client, briefly in
+// memory on issuance, and is never recoverable from the database (matches
+// how passwordHash is handled, and the same reasoning: a DB read should
+// never be able to reconstruct a credential).
+// ---------------------------------------------------------------------------
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  /// Set when this token was replaced by a newer one on refresh (token
+  /// rotation) — distinct from revokedAt so "used to refresh, superseded"
+  /// reads differently in an audit trail than "explicitly logged out" or
+  /// "reused after rotation, treated as compromised."
+  replacedByTokenHash String? @map("replaced_by_token_hash")
+  userAgent           String? @map("user_agent")
+  ipAddress           String? @map("ip_address")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// PasswordResetToken — covers both the "forgot password" email flow and the
+// staff "invite" flow (an invited user sets their first password through
+// the same mechanism, rather than a separate one-off code path).
+// ---------------------------------------------------------------------------
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }

@@ -2,13 +2,20 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { UsersModule } from '../users/users.module.js';
+import { AuthController } from './auth.controller.js';
+import { AuthService } from './auth.service.js';
+import { CredentialsModule } from './credentials.module.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 
 /**
- * Authentication infrastructure only — JWT verification wiring and the
- * Passport strategy that JwtAuthGuard relies on. There is no login/register
- * business module here yet: that is the first vertical slice for the next
- * backend phase, built on top of the User model this phase established.
+ * The authentication vertical slice: register/login/refresh/logout/me/
+ * password-reset/change-password, plus the JWT strategy JwtAuthGuard
+ * relies on. Built on UsersService (identity persistence) and
+ * CredentialsModule (hashing/tokens) rather than owning either directly —
+ * keeps "how a User is stored" and "how a password is hashed" each in one
+ * place, reusable by whatever needs them next (the staff-invite flow in
+ * UsersModule already does).
  */
 @Module({
   imports: [
@@ -23,8 +30,11 @@ import { JwtStrategy } from './strategies/jwt.strategy.js';
         },
       }),
     }),
+    CredentialsModule,
+    UsersModule,
   ],
-  providers: [JwtStrategy],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
   exports: [JwtModule, PassportModule],
 })
 export class AuthModule {}

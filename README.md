@@ -30,7 +30,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - `/owner` — owner/admin dashboard
 - `/portal` — member portal
 
-The backend (`backend/`) is not wired into these pages yet — the frontend still runs entirely on the realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly. See `backend/README.md` for the current state of the API: the database/config/validation/security foundation is in place, but no business endpoints (members, classes, payments, ...) exist yet, so there's nothing to point this frontend at until a later phase.
+The backend (`backend/`) is not wired into these pages yet — the frontend still runs entirely on the realistic mock data under `src/lib/data/`. The login screen includes shortcuts to preview both dashboards directly. See `backend/README.md` for the current state of the API: authentication, user management, and role/permission authorization are implemented and tested, but no business endpoints (members, classes, payments, ...) exist yet, so there's nothing to point this frontend at until a later phase.
 
 ## Project structure
 

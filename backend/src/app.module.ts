@@ -9,12 +9,14 @@ import securityConfig from './config/security.config.js';
 import { validate } from './config/env.validation.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthzModule } from './authz/authz.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
 import { RolesGuard } from './common/guards/roles.guard.js';
+import { PermissionsGuard } from './authz/permissions.guard.js';
 
 @Module({
   imports: [
@@ -37,6 +39,7 @@ import { RolesGuard } from './common/guards/roles.guard.js';
     }),
     PrismaModule,
     AuthModule,
+    AuthzModule,
     HealthModule,
   ],
   providers: [
@@ -49,6 +52,7 @@ import { RolesGuard } from './common/guards/roles.guard.js';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule {}
