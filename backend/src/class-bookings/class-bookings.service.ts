@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { runSerializableTransaction } from '../common/utils/serializable-transaction.util.js';
 import { ClassBookingStatus, ClassOccurrenceStatus, MemberStatus, UserRole } from '../generated/prisma/enums.js';
@@ -6,6 +7,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { PaginatedResult } from '../common/dto/pagination-query.dto.js';
 import { toClassBookingResponse, type ClassBookingResponseDto } from './dto/class-booking-response.dto.js';
 import type { ListClassBookingsQueryDto } from './dto/list-class-bookings-query.dto.js';
+import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 
 /** How long before class start a member is still allowed to self-cancel a CONFIRMED booking — mirrors the approved frontend's CANCELLATION_WINDOW_HOURS. */
 const CANCELLATION_WINDOW_HOURS = 4;
@@ -29,16 +31,22 @@ function occurrenceStartsAt(date: Date, startTime: string): Date {
 
 @Injectable()
 export class ClassBookingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   /**
    * Books `memberId` onto `classOccurrenceId`, or waitlists them if the
    * class is full. Runs inside a Serializable transaction with bounded
    * retry (see runSerializableTransaction) so two members racing for the
-   * last seat can never both end up CONFIRMED.
+   * last seat can never both end up CONFIRMED. The confirmed/waitlisted
+   * event is emitted AFTER the transaction resolves — never from inside
+   * the callback, since a retried attempt must never fire a notification
+   * for state that was thrown away (see domain-events.ts's own comment).
    */
   async book(tenantId: string, classOccurrenceId: string, memberId: string): Promise<ClassBookingResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const occurrence = await tx.classOccurrence.findFirst({ where: { id: classOccurrenceId, tenantId } });
       if (!occurrence) {
         throw new NotFoundException('Class session not found.');
@@ -83,6 +91,20 @@ export class ClassBookingsService {
 
       return toClassBookingResponse(booking);
     });
+
+    this.eventEmitter.emit(
+      result.status === ClassBookingStatus.CONFIRMED ? NOTIFICATION_EVENTS.BOOKING_CONFIRMED : NOTIFICATION_EVENTS.BOOKING_WAITLISTED,
+      {
+        tenantId,
+        memberId: result.member.id,
+        bookingId: result.id,
+        classOccurrenceId: result.classOccurrence.id,
+        className: result.classOccurrence.name,
+        date: result.classOccurrence.date,
+        startTime: result.classOccurrence.startTime,
+      },
+    );
+    return result;
   }
 
   /**
@@ -92,10 +114,11 @@ export class ClassBookingsService {
    * booking can only be self-cancelled outside the cancellation window —
    * WAITLISTED bookings can be dropped any time. Promotes the earliest
    * WAITLISTED booking (FIFO) to CONFIRMED when a CONFIRMED seat frees up,
-   * inside the same transaction.
+   * inside the same transaction. Only a STAFF-driven cancellation notifies
+   * the member — they already know when they cancel their own booking.
    */
   async cancel(tenantId: string, bookingId: string, caller?: { memberId: string }): Promise<ClassBookingResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const { booking: result, promoted } = await runSerializableTransaction(this.prisma, async (tx) => {
       const booking = await tx.classBooking.findFirst({
         where: { id: bookingId, tenantId },
         include: { classOccurrence: true },
@@ -126,18 +149,40 @@ export class ClassBookingsService {
         data: { status: ClassBookingStatus.CANCELLED, cancelledAt: new Date() },
       });
 
-      if (wasConfirmed) {
-        await this.promoteNextWaitlisted(tx, booking.classOccurrenceId);
-      }
+      const promoted = wasConfirmed ? await this.promoteNextWaitlisted(tx, booking.classOccurrenceId) : null;
 
       const updated = await tx.classBooking.findUniqueOrThrow({ where: { id: bookingId }, include: bookingInclude });
-      return toClassBookingResponse(updated);
+      return { booking: toClassBookingResponse(updated), promoted };
     });
+
+    if (!caller) {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.BOOKING_CANCELLED_BY_STAFF, {
+        tenantId,
+        memberId: result.member.id,
+        bookingId: result.id,
+        classOccurrenceId: result.classOccurrence.id,
+        className: result.classOccurrence.name,
+        date: result.classOccurrence.date,
+        startTime: result.classOccurrence.startTime,
+      });
+    }
+    if (promoted) {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.BOOKING_PROMOTED, {
+        tenantId,
+        memberId: promoted.memberId,
+        bookingId: promoted.id,
+        classOccurrenceId: result.classOccurrence.id,
+        className: result.classOccurrence.name,
+        date: result.classOccurrence.date,
+        startTime: result.classOccurrence.startTime,
+      });
+    }
+    return result;
   }
 
   /** Staff override: manually promote a specific waitlisted booking, skipping FIFO order (e.g. for the approved frontend's "Promote to Booked" action). */
   async promote(tenantId: string, bookingId: string): Promise<ClassBookingResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const booking = await tx.classBooking.findFirst({ where: { id: bookingId, tenantId }, include: { classOccurrence: true } });
       if (!booking) {
         throw new NotFoundException('Booking not found.');
@@ -159,9 +204,20 @@ export class ClassBookingsService {
       });
       return toClassBookingResponse(updated);
     });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.BOOKING_PROMOTED, {
+      tenantId,
+      memberId: result.member.id,
+      bookingId: result.id,
+      classOccurrenceId: result.classOccurrence.id,
+      className: result.classOccurrence.name,
+      date: result.classOccurrence.date,
+      startTime: result.classOccurrence.startTime,
+    });
+    return result;
   }
 
-  private async promoteNextWaitlisted(tx: Prisma.TransactionClient, classOccurrenceId: string): Promise<void> {
+  private async promoteNextWaitlisted(tx: Prisma.TransactionClient, classOccurrenceId: string): Promise<{ id: string; memberId: string } | null> {
     const next = await tx.classBooking.findFirst({
       where: { classOccurrenceId, status: ClassBookingStatus.WAITLISTED },
       orderBy: { bookedAt: 'asc' },
@@ -171,7 +227,9 @@ export class ClassBookingsService {
         where: { id: next.id },
         data: { status: ClassBookingStatus.CONFIRMED, bookedAt: new Date() },
       });
+      return { id: next.id, memberId: next.memberId };
     }
+    return null;
   }
 
   async listForMember(tenantId: string, memberId: string, query: ListClassBookingsQueryDto): Promise<PaginatedResult<ClassBookingResponseDto>> {

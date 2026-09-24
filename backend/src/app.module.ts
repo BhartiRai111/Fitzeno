@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import appConfig from './config/app.config.js';
 import databaseConfig from './config/database.config.js';
 import jwtConfig from './config/jwt.config.js';
@@ -28,6 +30,7 @@ import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
 import { MembershipPlansModule } from './membership-plans/membership-plans.module.js';
 import { MembershipsModule } from './memberships/memberships.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -36,6 +39,16 @@ import { PaymentsModule } from './payments/payments.module.js';
       validate,
       load: [appConfig, databaseConfig, jwtConfig, securityConfig],
     }),
+    // Global, in-process event bus every business module emits domain
+    // events on (see notifications/events/domain-events.ts) — no external
+    // broker needed at this scale. Registered once here so EventEmitter2
+    // is injectable anywhere without a per-module import.
+    EventEmitterModule.forRoot(),
+    // Powers NotificationsSchedulerService's @Cron jobs (membership expiry
+    // reminders, upcoming class/PT reminders, lead follow-up reminders) —
+    // an in-process scheduler is the right amount of infrastructure for a
+    // single backend instance; no external queue/worker needed yet.
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -61,6 +74,7 @@ import { PaymentsModule } from './payments/payments.module.js';
     MembershipPlansModule,
     MembershipsModule,
     PaymentsModule,
+    NotificationsModule,
     HealthModule,
   ],
   providers: [

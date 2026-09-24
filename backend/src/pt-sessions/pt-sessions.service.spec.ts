@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PtSessionsService } from './pt-sessions.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -52,7 +53,8 @@ describe('PtSessionsService', () => {
     membersService = {} as unknown as MembersService;
     trainersService = { getActiveBookableTrainer: vi.fn() } as unknown as TrainersService;
 
-    service = new PtSessionsService(prisma, membersService, trainersService);
+    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    service = new PtSessionsService(prisma, membersService, trainersService, eventEmitter);
   });
 
   describe('getAvailableSlots', () => {

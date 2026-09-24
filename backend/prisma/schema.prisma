@@ -95,20 +95,23 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users             User[]
-  settings          TenantSettings?
-  members           Member[]
-  leads             Lead[]
-  trainers          Trainer[]
-  classSeries       ClassSeries[]
-  classBookings     ClassBooking[]
-  ptSessions        PersonalTrainingSession[]
-  membershipPlans   MembershipPlan[]
-  memberMemberships MemberMembership[]
-  transactions      Transaction[]
-  invoices          Invoice[]
-  invoiceCounter    InvoiceCounter?
-  refunds           Refund[]
+  users                   User[]
+  settings                TenantSettings?
+  members                 Member[]
+  leads                   Lead[]
+  trainers                Trainer[]
+  classSeries             ClassSeries[]
+  classBookings           ClassBooking[]
+  ptSessions              PersonalTrainingSession[]
+  membershipPlans         MembershipPlan[]
+  memberMemberships       MemberMembership[]
+  transactions            Transaction[]
+  invoices                Invoice[]
+  invoiceCounter          InvoiceCounter?
+  refunds                 Refund[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
+  announcements           Announcement[]
 
   @@map("tenants")
 }
@@ -222,6 +225,13 @@ model User {
   ptSessionsTaught       PersonalTrainingSession[] @relation("PtSessionTrainer")
   transactionsRecorded   Transaction[]
   refundsProcessed       Refund[]
+
+  /// Every in-app notification addressed to this login — see Notification's
+  /// own comment for why the recipient is always a User, never a Member/
+  /// Trainer directly.
+  notificationsReceived   Notification[]           @relation("NotificationRecipient")
+  notificationPreferences NotificationPreference[] @relation("NotificationPreferenceUser")
+  announcementsSent       Announcement[]           @relation("AnnouncementSender")
 
   @@index([tenantId])
   @@index([tenantId, role])
@@ -976,7 +986,8 @@ model MembershipPlan {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships MemberMembership[]
+  memberships   MemberMembership[]
+  announcements Announcement[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
@@ -1390,4 +1401,223 @@ model Refund {
 
   @@index([tenantId, transactionId])
   @@map("refunds")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 — Notifications & Communication. One reusable in-app notification
+// model every business module (Bookings, Memberships, Payments, Leads today;
+// Attendance/Store/Finance later) delivers through, rather than each owning
+// its own alerting. Three tables:
+//
+//   Notification — one row per (recipient, event). The recipient is always
+//     a User (a login identity), never a Member/Trainer directly — a Member
+//     with no linked login simply can't receive one, which is correct since
+//     they have no portal session to see it in. `readAt` (nullable) is the
+//     single source of truth for read/unread state — no separate boolean
+//     that could drift from it. `relatedEntityType`/`relatedEntityId` +
+//     `actionUrl` carry deep-link context WITHOUT re-exposing raw data: the
+//     row is only ever created for a recipient already authorized to see
+//     that entity (see NotificationsService's own comment), so a client
+//     following the link still goes through that entity's normal
+//     authorized endpoint — a notification never becomes a side-channel
+//     around existing authorization.
+//   NotificationPreference — a sparse per-(user, category) override table,
+//     the exact same shape as the existing PermissionOverride: a user with
+//     no row for a category gets that category's default (enabled), only
+//     an explicit opt-out is ever stored. Keeps "is category X on for user
+//     Y" a single indexed lookup instead of a fixed-column table that needs
+//     a migration every time a category is added.
+//   Announcement — the record of one broadcast an owner/manager sent (audience,
+//     recipient count, who/when) — matches the approved frontend's
+//     SentAnnouncement shape. The actual delivery is just N Notification
+//     rows (category ANNOUNCEMENT) created at send time for whoever the
+//     audience resolved to; there's no separate "did I see this
+//     announcement" tracking to keep in sync; the Notification's own
+//     readAt already answers that.
+//
+// Event-driven, not polling: business services emit a domain event (via
+// EventEmitter2, an in-process pub/sub already bundled with Nest — no
+// external broker needed at this scale) after their own DB transaction
+// commits; a single listener in the notifications module turns each event
+// into the right Notification row(s) for the right recipient(s). See
+// NotificationsModule's own file comment for the full reasoning, and why
+// events are only ever emitted AFTER a transaction resolves, never from
+// inside one.
+// ---------------------------------------------------------------------------
+
+/// Mirrors the approved frontend's NotificationCategory 1:1 for every value
+/// this backend can actually produce today. INVENTORY/EXPENSE are
+/// deliberately omitted — the frontend tolerates unknown-to-it categories
+/// gracefully, but there is no Store/Finance module yet to emit them from
+/// (adding a category later is a pure additive migration, no data change).
+enum NotificationCategory {
+  /// A member's own class/PT booking — confirmed, waitlisted, promoted, or
+  /// cancelled on their behalf. Also used for a trainer's own PT calendar.
+  BOOKING
+  /// Specifically waitlist-position related — reserved for a future
+  /// "you moved up to #2" style update; today WAITLISTED bookings notify
+  /// under BOOKING (see NotificationsEventListener).
+  WAITLIST
+  /// A class SESSION itself changing under a member/trainer — cancelled,
+  /// rescheduled, or (later) nearly full.
+  CLASS
+  /// The full membership lifecycle — created, renewed, cancelled, expiring
+  /// soon, expired. One bucket, matching the frontend's own grouping.
+  RENEWAL
+  /// A transaction's outcome — paid, failed, refunded.
+  PAYMENT
+  /// Reserved for the future Attendance module (ATTENDED/NO_SHOW already
+  /// exist as booking-status values — see ClassBooking/PersonalTrainingSession
+  /// — but nothing sets them yet, so nothing emits this category yet).
+  ATTENDANCE
+  /// A lead needing follow-up.
+  LEAD
+  /// Reserved for staff/team-management events (e.g. a pending invite) —
+  /// no automatic trigger this phase; kept so Announcements' STAFF/
+  /// TRAINERS_AND_STAFF audiences and any future trigger don't need a
+  /// migration to add it.
+  STAFF
+  /// A broadcast Announcement — see the Announcement model.
+  ANNOUNCEMENT
+  /// Marketing/offer communication — a preference category the frontend
+  /// already exposes for members; no automatic trigger produces this yet
+  /// (see the module README notes on not building marketing automation).
+  PROMOTION
+  /// Structural/operational notices essential enough that a user can't
+  /// opt out — see NotificationPreference's own comment. Nothing emits
+  /// this yet; reserved for e.g. a future account/security notice.
+  SYSTEM
+
+  @@map("notification_category")
+}
+
+enum NotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@map("notification_priority")
+}
+
+// ---------------------------------------------------------------------------
+// Notification — see the phase-level comment above for the full model
+// reasoning. `dedupKey` is null for ordinary event-driven notifications
+// (which may legitimately repeat — two separate failed payments are two
+// separate rows) and set only for scheduled/reminder notifications that
+// must fire at most once per (recipient, milestone) — e.g.
+// "membership:{id}:expiring:7d" — enforced by the unique constraint below
+// rather than a separate "already sent" log table, the same idempotency-key
+// pattern Transaction.idempotencyKey already established in this schema.
+// ---------------------------------------------------------------------------
+model Notification {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  recipientUserId String @map("recipient_user_id")
+  recipient       User   @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  category NotificationCategory
+  priority NotificationPriority @default(MEDIUM)
+
+  title   String
+  message String
+
+  /// e.g. "class_booking", "pt_session", "membership", "transaction",
+  /// "invoice", "lead" — free text, not an enum: purely descriptive
+  /// metadata for the client, never used to build a query itself.
+  relatedEntityType String? @map("related_entity_type")
+  relatedEntityId   String? @map("related_entity_id")
+  /// A gym-app-relative deep link (e.g. "/portal/bookings"), matching the
+  /// approved frontend's NotificationItem.href exactly.
+  actionUrl         String? @map("action_url")
+
+  dedupKey String? @map("dedup_key")
+
+  readAt DateTime? @map("read_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  /// Optional cleanup marker for notifications with a natural shelf life
+  /// (e.g. a promotional offer) — nothing purges on it yet; reserved for a
+  /// future housekeeping job rather than enforced at read time, so an
+  /// "expired" notification doesn't silently vanish from a member's history.
+  expiresAt DateTime? @map("expires_at")
+
+  @@unique([recipientUserId, dedupKey])
+  @@index([tenantId, recipientUserId, createdAt])
+  @@index([tenantId, recipientUserId, readAt])
+  @@index([tenantId, recipientUserId, category])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// NotificationPreference — see the phase-level comment above. SYSTEM is the
+// one category NotificationsService refuses to store a disabling row for
+// (see its own updatePreferences comment) — the schema itself doesn't need
+// to enforce that, since every row here is an OPT-OUT the application layer
+// chooses to write, not a toggle the database interprets.
+// ---------------------------------------------------------------------------
+model NotificationPreference {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id")
+  user   User   @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  category NotificationCategory
+  enabled  Boolean              @default(true)
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, category])
+  @@map("notification_preferences")
+}
+
+/// Mirrors the approved frontend's SendNotificationDialog audience options —
+/// PLAN_MEMBERS/SPECIFIC_MEMBERS carry their own extra targeting data
+/// (audiencePlanId on the model; the explicit member id list is resolved
+/// and fanned out to Notification rows at send time, not stored long-term —
+/// matching the frontend's own SentAnnouncement, which only ever keeps a
+/// recipientCount + audience label, never a member-by-member list).
+enum AnnouncementAudience {
+  ALL_MEMBERS
+  ACTIVE_MEMBERS
+  EXPIRING_MEMBERS
+  PLAN_MEMBERS
+  ALL_TRAINERS
+  ALL_STAFF
+  TRAINERS_AND_STAFF
+  SPECIFIC_MEMBERS
+
+  @@map("announcement_audience")
+}
+
+model Announcement {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  title    String
+  message  String
+  priority NotificationPriority @default(MEDIUM)
+
+  audience       AnnouncementAudience
+  /// Only set (and only meaningful) when audience = PLAN_MEMBERS.
+  audiencePlanId String?              @map("audience_plan_id")
+  audiencePlan   MembershipPlan?      @relation(fields: [audiencePlanId], references: [id], onDelete: SetNull)
+
+  /// A snapshot of how many recipients actually resolved at send time —
+  /// not live-recomputed later, the same reasoning MemberMembership
+  /// snapshots plan price at purchase time: this is a record of what
+  /// happened, not a live query.
+  recipientCount Int @map("recipient_count")
+
+  sentByUserId String @map("sent_by_user_id")
+  sentBy       User   @relation("AnnouncementSender", fields: [sentByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@map("announcements")
 }

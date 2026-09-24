@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClassBookingsService } from './class-bookings.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -62,7 +63,8 @@ describe('ClassBookingsService', () => {
       ),
     } as unknown as PrismaService;
 
-    service = new ClassBookingsService(prisma);
+    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    service = new ClassBookingsService(prisma, eventEmitter);
   });
 
   describe('book', () => {

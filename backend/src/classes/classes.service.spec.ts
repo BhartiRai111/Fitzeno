@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClassesService } from './classes.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -56,7 +57,8 @@ describe('ClassesService', () => {
     } as unknown as PrismaService;
 
     usersService = { findByIdInTenant: vi.fn() } as unknown as UsersService;
-    service = new ClassesService(prisma, usersService);
+    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    service = new ClassesService(prisma, usersService, eventEmitter);
   });
 
   describe('createSeries', () => {
@@ -206,7 +208,13 @@ describe('ClassesService', () => {
     });
 
     it('cancels the occurrence and its active bookings', async () => {
-      vi.mocked(prisma.classOccurrence.findFirst).mockResolvedValue({ id: 'occ-1', status: 'SCHEDULED' } as never);
+      vi.mocked(prisma.classOccurrence.findFirst).mockResolvedValue({
+        id: 'occ-1',
+        status: 'SCHEDULED',
+        trainerId: 'trainer-user-1',
+        classSeries: { name: 'Spin' },
+        bookings: [],
+      } as never);
       vi.mocked(prisma.classOccurrence.update).mockResolvedValue({
         id: 'occ-1',
         status: 'CANCELLED',
