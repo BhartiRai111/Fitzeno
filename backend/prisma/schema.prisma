@@ -1,8 +1,11 @@
 // Fitzeno backend — Prisma schema
 //
-// This phase establishes only the foundation-level schema: the tenant
-// (business/gym) boundary and the user/identity model every future business
-// module (members, staff, classes, payments, ...) will hang off of.
+// Phase 1 (Tenant/User foundation) + Phase 2 (this one: Auth, Users, Roles &
+// Permissions) — the identity and access-control layer every future business
+// module builds on. No business-domain tables (members, classes, payments,
+// ...) yet — those are later phases, and they'll each carry their own
+// `userId` FK back to the identity established here rather than duplicating
+// it.
 //
 // Conventions used throughout this schema, for every future model to follow:
 //   - `id` is a UUID (`@default(uuid())`), never an auto-increment integer,
@@ -11,9 +14,11 @@
 //   - `deletedAt` nullable timestamp for soft deletion on records an owner
 //     might restore (never hard-delete business/financial history).
 //   - Tenant-scoped tables carry a `tenantId` foreign key + index so every
-//     query can (and, once query middleware lands, must) filter by tenant.
-//   - snake_case column/table names in the database via @@map / @map, camelCase
-//     in the generated client — keeps SQL idiomatic while TS stays idiomatic.
+//     query can (and, as of this phase, must — see UsersService) filter by
+//     tenant.
+//   - snake_case column/table names in the database via @map/@@map,
+//     camelCase in the generated client — keeps SQL idiomatic while the
+//     application code stays idiomatic TS.
 
 generator client {
   provider = "prisma-client"
@@ -24,31 +29,130 @@ datasource db {
   provider = "postgresql"
 }
 
+/// ONBOARDING — just created via /auth/register-business; fully usable, but
+///   flagged so the frontend can show a "finish setting up" nudge. Flips to
+///   ACTIVE automatically the first time the owner saves their gym profile.
+/// ACTIVE — normal operation.
+/// INACTIVE — the owner has paused/closed the gym themselves. Self-service
+///   reversible (PATCH /tenants/me/status back to ACTIVE).
+/// SUSPENDED — a platform-level hold (not reachable through any endpoint
+///   yet — no platform-admin surface exists this phase). Reserved so the
+///   enforcement path and the schema don't need to change when one lands;
+///   deliberately NOT self-liftable by the gym's own owner.
+enum TenantStatus {
+  ONBOARDING
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@map("tenant_status")
+}
+
 // ---------------------------------------------------------------------------
 // Tenant — one row per gym/business using the platform. Every tenant-owned
 // table below carries a tenantId so one gym's data is never reachable from
-// another's request context (enforced in application code by a tenant guard
-// in a later phase; the column + index is the schema-level half of that).
+// another's request context. This phase starts actually enforcing that in
+// application code (every UsersService query filters by tenantId) rather
+// than just carrying the column, per the foundation phase's README note.
+//
+// Identity (name/slug) and public/business-profile fields live directly on
+// this table — they're core to what a "gym" IS, queried together with every
+// other tenant lookup, and small/scalar enough that JSON would just add
+// indirection. Operational preferences that are edited together as one
+// settings document (hours, membership policy, notification/payment
+// toggles) live in the separate 1:1 TenantSettings table instead — see its
+// own comment for why those are JSON columns rather than more tables.
 // ---------------------------------------------------------------------------
 model Tenant {
-  id        String    @id @default(uuid())
-  name      String
-  /// URL-safe unique handle, e.g. for a future custom subdomain or public slug.
-  slug      String    @unique
-  timezone  String    @default("Europe/London")
+  id     String       @id @default(uuid())
+  name   String
+  /// URL-safe unique handle — resolves a member-registration request to the
+  /// right gym (see AuthService.resolveTenantForRegistration) and doubles as
+  /// a future public-page/subdomain handle. Set at creation, immutable via
+  /// the API for now (changing it would break outstanding join links).
+  slug   String       @unique
+  status TenantStatus @default(ONBOARDING)
+
+  /// Shown on the public site and member/staff apps — see gymProfile in the
+  /// approved frontend's mock data for the shape this mirrors.
+  tagline     String?
+  description String?
+  logoUrl     String? @map("logo_url")
+  phone       String?
+  email       String?
+  website     String?
+  addressLine String? @map("address_line")
+  city        String?
+  region      String?
+  postalCode  String? @map("postal_code")
+  country     String?
+
+  timezone String @default("Europe/London")
+  currency String @default("GBP")
+  locale   String @default("en-GB")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users User[]
+  users             User[]
+  settings          TenantSettings?
+  members           Member[]
+  leads             Lead[]
+  trainers          Trainer[]
+  classSeries       ClassSeries[]
+  classBookings     ClassBooking[]
+  ptSessions        PersonalTrainingSession[]
+  membershipPlans   MembershipPlan[]
+  memberMemberships MemberMembership[]
+  transactions      Transaction[]
+  invoices          Invoice[]
+  invoiceCounter    InvoiceCounter?
+  refunds           Refund[]
 
   @@map("tenants")
 }
 
+// ---------------------------------------------------------------------------
+// TenantSettings — the operational configuration a gym owner edits from the
+// Settings page, one-to-one with Tenant. Each column is a specific, documented
+// shape (not a generic key-value bag) matching one tab of the approved
+// Settings UI; JSON is the right fit here because each one is a small,
+// bounded, list/toggle-map structure that's always read and written as a
+// whole document per tab, not queried or indexed by its individual fields —
+// normalizing "freeze days" or "accepts card payments" into their own
+// columns/tables would add schema churn with no real query benefit.
+// Created together with every Tenant (see AuthService.registerBusiness and
+// prisma/seed.ts) so it always exists; TenantsService defensively creates a
+// default-valued row on first read for any tenant that predates that.
+// ---------------------------------------------------------------------------
+model TenantSettings {
+  id       String @id @default(uuid())
+  tenantId String @unique @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// [{ day: string, time: string }, ...] — matches the Settings > Business
+  /// Hours tab exactly (free-text time range per day/day-group).
+  businessHours           Json @default("[]") @map("business_hours")
+  /// { freezesPerYear, maxFreezeDurationDays, cancellationNoticeDays,
+  ///   renewalReminderDaysBefore: number[] } — membership policy defaults
+  /// the future Memberships module will read, not a memberships table.
+  membershipPolicy        Json @default("{}") @map("membership_policy")
+  /// { card, upi, cash, bankTransfer: boolean } — accepted payment methods.
+  paymentMethods          Json @default("{}") @map("payment_methods")
+  /// { member: {...}, staff: {...} } — platform-wide communication-channel
+  /// toggles (per-user notification preferences are a separate concern).
+  notificationPreferences Json @default("{}") @map("notification_preferences")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("tenant_settings")
+}
+
 /// Mirrors the frontend's StaffAccessRole ("owner" | "manager" | "trainer" |
 /// "front-desk") plus MEMBER for member-portal accounts, which the frontend
-/// currently models separately (Member) but will need a login identity for
-/// once the Member Portal is wired to real auth.
+/// currently models separately (Member) but needs a login identity for here.
 enum UserRole {
   OWNER
   MANAGER
@@ -59,6 +163,12 @@ enum UserRole {
   @@map("user_role")
 }
 
+/// ACTIVE — normal login access.
+/// INVITED — a staff account created by an owner/manager via the invite
+///   flow, with no password set yet; can only complete setup via the
+///   invite's password-reset-style token, not log in directly.
+/// INACTIVE — access revoked (former staff, or an owner-initiated
+///   suspension); login is blocked with a clear, non-enumerating message.
 enum UserStatus {
   ACTIVE
   INVITED
@@ -81,6 +191,7 @@ model User {
   passwordHash String     @map("password_hash")
   firstName    String     @map("first_name")
   lastName     String     @map("last_name")
+  phone        String?
   role         UserRole
   status       UserStatus @default(ACTIVE)
   lastLoginAt  DateTime?  @map("last_login_at")
@@ -88,7 +199,1195 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at")
   deletedAt    DateTime?  @map("deleted_at")
 
+  permissionOverrides PermissionOverride[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
+  /// The member profile linked to this login, if this user has one — see
+  /// Member's own comment for why the link is optional and one-directional.
+  member              Member?      @relation("MemberPortalUser")
+  /// Members this user coaches (only meaningful when role = TRAINER, but not
+  /// DB-enforced — see MembersService.assertValidTrainer for the app-level check).
+  membersAsTrainer    Member[]     @relation("MemberTrainer")
+  assignedLeads       Lead[]       @relation("LeadAssignee")
+  memberNotesAuthored MemberNote[]
+  leadNotesAuthored   LeadNote[]
+
+  /// The Trainer coaching profile linked to this login, if this user has
+  /// one — see Trainer's own comment for why the link is optional and
+  /// never auto-created.
+  trainerProfile         Trainer?                  @relation("TrainerProfile")
+  classSeriesTaught      ClassSeries[]             @relation("ClassTrainer")
+  classOccurrencesTaught ClassOccurrence[]         @relation("ClassOccurrenceTrainer")
+  ptSessionsTaught       PersonalTrainingSession[] @relation("PtSessionTrainer")
+  transactionsRecorded   Transaction[]
+  refundsProcessed       Refund[]
+
   @@index([tenantId])
   @@index([tenantId, role])
   @@map("users")
+}
+
+/// Mirrors the frontend's PermissionArea union 1:1 (src/lib/data/types.ts).
+enum PermissionArea {
+  MEMBERS
+  BOOKINGS
+  ATTENDANCE
+  MEMBERSHIPS
+  PAYMENTS
+  STORE
+  FINANCE
+  REPORTS
+  STAFF
+  ANNOUNCEMENTS
+  SETTINGS
+
+  @@map("permission_area")
+}
+
+/// Mirrors the frontend's PermissionLevel union 1:1.
+enum PermissionLevel {
+  NONE
+  VIEW
+  MANAGE
+
+  @@map("permission_level")
+}
+
+// ---------------------------------------------------------------------------
+// PermissionOverride — per-user exceptions to their role's default
+// permissions (src/lib/permissions.ts's ROLE_DEFAULT_PERMISSIONS on the
+// frontend, mirrored server-side in authz/role-permissions.const.ts). A user
+// with no rows here just gets their role's defaults; effective permissions
+// are role-defaults merged with these overrides, computed at request time
+// by PermissionsService rather than stored redundantly per-area-per-user.
+// ---------------------------------------------------------------------------
+model PermissionOverride {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area      PermissionArea
+  level     PermissionLevel
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  @@unique([userId, area])
+  @@map("permission_overrides")
+}
+
+// ---------------------------------------------------------------------------
+// RefreshToken — one row per issued refresh token, so logout and password
+// changes can actually revoke access instead of waiting out a stateless
+// token's lifetime. Only a SHA-256 hash of the token is stored — the raw
+// value exists only in the httpOnly cookie on the client, briefly in
+// memory on issuance, and is never recoverable from the database (matches
+// how passwordHash is handled, and the same reasoning: a DB read should
+// never be able to reconstruct a credential).
+// ---------------------------------------------------------------------------
+model RefreshToken {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash           String    @unique @map("token_hash")
+  expiresAt           DateTime  @map("expires_at")
+  revokedAt           DateTime? @map("revoked_at")
+  /// Set when this token was replaced by a newer one on refresh (token
+  /// rotation) — distinct from revokedAt so "used to refresh, superseded"
+  /// reads differently in an audit trail than "explicitly logged out" or
+  /// "reused after rotation, treated as compromised."
+  replacedByTokenHash String?   @map("replaced_by_token_hash")
+  userAgent           String?   @map("user_agent")
+  ipAddress           String?   @map("ip_address")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// PasswordResetToken — covers both the "forgot password" email flow and the
+// staff "invite" flow (an invited user sets their first password through
+// the same mechanism, rather than a separate one-off code path).
+// ---------------------------------------------------------------------------
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// ACTIVE — a current, recognized member of the gym.
+/// INACTIVE — no longer engaged (hasn't renewed, gone quiet) but the record
+///   is kept, not closed — reversible with no special process.
+/// CANCELLED — the relationship has formally ended (their choice or the
+///   gym's). Kept for history, same as every other soft-managed status in
+///   this schema; nothing currently re-activates a cancelled member
+///   automatically.
+/// Deliberately NOT the same enum as a future MembershipStatus (trial /
+/// active / expiring / expired / frozen / cancelled) — that describes a
+/// PAID PLAN's state and belongs to the Memberships module a later phase
+/// adds; a member can exist here with no active membership at all (lapsed,
+/// between plans, or never purchased one — e.g. a lead converted today
+/// whose first payment hasn't been recorded yet). Conflating the two was
+/// flagged explicitly as a modeling mistake to avoid.
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  CANCELLED
+
+  @@map("member_status")
+}
+
+// ---------------------------------------------------------------------------
+// Member — a gym member's business profile: the "who they are to this gym"
+// layer, separate from the "how they log in" layer (User). A Member is
+// NEVER required to have a login — front-desk staff routinely add a walk-in
+// member's name/contact/emergency info long before (or instead of) that
+// person ever creating portal credentials. `userId` is therefore optional
+// and one-directional (Member -> User, never the reverse as a hard
+// requirement): when a matching person later registers for the member
+// portal, AuthService.register() links the two by email rather than
+// creating a second, disconnected identity — see its own comment.
+//
+// Deliberately carries no membership-plan/payment/attendance/booking data
+// — those are each a later module's own table with its own `memberId` FK
+// back here, exactly like User's own header comment describes for
+// business-specific profile data. This is the stable join point they'll
+// all hang off, not a place to grow ad hoc columns for whatever the
+// frontend currently renders.
+// ---------------------------------------------------------------------------
+model Member {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Optional, unique — at most one Member per login, and a Member need not
+  /// have one at all. SetNull (not Cascade): deleting/disabling the login
+  /// must never delete the gym's own record of this person.
+  userId String? @unique @map("user_id")
+  user   User?   @relation("MemberPortalUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Own columns, not sourced live from User — see the model comment. When
+  /// userId is linked, MembersService keeps these in sync going forward
+  /// rather than joining through User on every read.
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  email     String?
+  phone     String?
+
+  /// Free text, not a closed enum — a member's own words, not a system state.
+  gender                String?
+  dateOfBirth           DateTime? @map("date_of_birth")
+  addressLine           String?   @map("address_line")
+  emergencyContactName  String?   @map("emergency_contact_name")
+  emergencyContactPhone String?   @map("emergency_contact_phone")
+
+  status   MemberStatus @default(ACTIVE)
+  /// Member-since date — distinct from createdAt, which is when this ROW was
+  /// created (e.g. backfilled data, or a conversion recorded after the fact).
+  joinedOn DateTime     @default(now()) @map("joined_on")
+
+  trainerId String? @map("trainer_id")
+  trainer   User?   @relation("MemberTrainer", fields: [trainerId], references: [id], onDelete: SetNull)
+
+  /// Set when this member was created via lead conversion (LeadsService) —
+  /// the provenance link. A member created directly by staff (no lead
+  /// involved) simply has this null. The Lead's own source/interest/notes
+  /// stay reachable through this relation rather than being copied onto
+  /// Member, so there's exactly one place they're stored.
+  convertedFromLeadId String? @unique @map("converted_from_lead_id")
+  convertedFromLead   Lead?   @relation("LeadConversion", fields: [convertedFromLeadId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  notes         MemberNote[]
+  classBookings ClassBooking[]
+  ptSessions    PersonalTrainingSession[]
+  memberships   MemberMembership[]
+  transactions  Transaction[]
+  invoices      Invoice[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, trainerId])
+  @@map("members")
+}
+
+// ---------------------------------------------------------------------------
+// MemberNote / LeadNote — free-text, independently authored/timestamped
+// entries that accumulate over a member's or lead's lifetime. Real tables,
+// not a JSON array column like TenantSettings uses: each entry has its own
+// author and timestamp and is appended one at a time, never replaced as a
+// whole document — the opposite access pattern from the settings blobs,
+// so the JSON-column reasoning that fit there doesn't apply here.
+// ---------------------------------------------------------------------------
+model MemberNote {
+  id       String @id @default(uuid())
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  authorId String? @map("author_id")
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body     String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@map("member_notes")
+}
+
+/// NEW -> CONTACTED -> FOLLOW_UP -> TRIAL_SCHEDULED -> TRIAL_COMPLETED ->
+/// CONVERTED is the typical path, but transitions are NOT enforced as a
+/// strict state machine (a walk-in can go NEW -> CONVERTED same day; a
+/// FOLLOW_UP can bounce back from TRIAL_SCHEDULED if a trial gets
+/// postponed) — real gym sales cycles don't fit a rigid funnel. LOST is a
+/// terminal-but-reversible dead end (a lost lead can be reopened into
+/// FOLLOW_UP later). CONVERTED is the one truly one-way transition — it
+/// only happens through LeadsService.convert(), never a plain status PATCH,
+/// because it also creates (or links) the Member record; see LeadsService.
+enum LeadStatus {
+  NEW
+  CONTACTED
+  FOLLOW_UP
+  TRIAL_SCHEDULED
+  TRIAL_COMPLETED
+  CONVERTED
+  LOST
+
+  @@map("lead_status")
+}
+
+/// Mirrors the approved frontend's LeadSource union (src/lib/data/types.ts)
+/// plus OTHER, for real-world data entry the closed frontend set doesn't
+/// anticipate — purely additive, so it doesn't conflict with that set.
+enum LeadSource {
+  WEBSITE
+  INSTAGRAM
+  REFERRAL
+  WALK_IN
+  ADVERTISEMENT
+  OTHER
+
+  @@map("lead_source")
+}
+
+enum LeadLostReason {
+  NO_RESPONSE
+  NOT_INTERESTED
+  PRICE
+  CHOSE_ANOTHER_GYM
+  BAD_TIMING
+  OTHER
+
+  @@map("lead_lost_reason")
+}
+
+// ---------------------------------------------------------------------------
+// Lead — a potential member who hasn't (yet) converted. Intentionally
+// carries no membership/payment fields (those belong to Member, once
+// conversion happens) and no FK to a Class/Booking row — the Classes/
+// Bookings module doesn't exist yet, and inventing one now would risk a
+// second, conflicting source of truth once it's built. `trialScheduledAt`
+// is a plain timestamp for that reason: enough for "this lead has a trial
+// booked and when," with the eventual Bookings module free to link a real
+// Booking row back to this Lead (or to the resulting Member) however it
+// sees fit, without Lead needing to change.
+// ---------------------------------------------------------------------------
+model Lead {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  email     String?
+  phone     String?
+
+  source   LeadSource
+  /// Free text — what they're interested in (e.g. "Weight loss", "PT sessions").
+  interest String?
+
+  status     LeadStatus      @default(NEW)
+  lostReason LeadLostReason? @map("lost_reason")
+
+  assignedToId String? @map("assigned_to_id")
+  assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /// Drives the "which leads need attention today" query — see
+  /// LeadsService.list's followUpDueBy filter.
+  nextFollowUpAt   DateTime? @map("next_follow_up_at")
+  trialScheduledAt DateTime? @map("trial_scheduled_at")
+  trialNotes       String?   @map("trial_notes")
+
+  /// Set once, by LeadsService.convert() only — see LeadStatus's comment.
+  convertedAt     DateTime? @map("converted_at")
+  convertedMember Member?   @relation("LeadConversion")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  notes LeadNote[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, assignedToId])
+  @@index([tenantId, nextFollowUpAt])
+  @@map("leads")
+}
+
+model LeadNote {
+  id     String @id @default(uuid())
+  leadId String @map("lead_id")
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  authorId String? @map("author_id")
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body     String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([leadId])
+  @@map("lead_notes")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Trainers, Classes, Scheduling, Bookings, Waitlist & Personal
+// Training. Builds on the identity (User) and tenant layers above; carries
+// no Attendance/Payments/Notifications tables of its own — see each model's
+// comment for the specific integration points left for those later phases.
+//
+// Recurring-class model: a two-table split. ClassSeries is the recurring
+// TEMPLATE an owner/manager authors once (day of week, time, trainer,
+// capacity, location); ClassOccurrence rows are the actual dated instances
+// members book. Occurrences are generated lazily (on read, by
+// ClassesService.ensureOccurrencesGenerated) for a rolling horizon rather
+// than by a cron job or generated exhaustively up front — idempotent via
+// the (classSeriesId, date) unique constraint, so re-running generation for
+// an already-covered date is a no-op. A "one-off" class is simply a
+// ClassSeries whose endDate equals its startDate (generates exactly one
+// occurrence) — no separate model or recurrence-type enum needed for that.
+//
+// Booking concurrency: capacity/waitlist accounting (ClassBookingsService)
+// runs inside a Prisma Serializable-isolation transaction with a bounded
+// retry on write-conflict (P2034), rather than raw SQL row locking — the
+// simpler, still-correct option for this scale.
+//
+// Booking-row reuse: ClassBooking has one unique row per
+// (classOccurrenceId, memberId) — cancelling and later rebooking the same
+// occurrence REUSES that row (status transitions CANCELLED -> CONFIRMED /
+// WAITLISTED) rather than inserting a new one, since Prisma's schema DSL
+// can't express a partial unique index that would otherwise be needed to
+// allow multiple CANCELLED rows alongside one active one.
+// ---------------------------------------------------------------------------
+
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+  SUN
+
+  @@map("day_of_week")
+}
+
+/// ACTIVE — coaching, bookable for classes/PT.
+/// INACTIVE — a TRAINER-role user who's temporarily not taking new
+///   classes/PT bookings (e.g. on leave); distinct from the User itself
+///   being disabled — see the model comment.
+enum TrainerStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("trainer_status")
+}
+
+// ---------------------------------------------------------------------------
+// Trainer — the coaching profile for a User whose role is TRAINER: exactly
+// the "business-specific profile data" pattern User's own header comment
+// describes (bio, specialties, certifications, PT availability), kept off
+// User itself so identity/login stays separate from coaching-specific
+// fields no other role needs. One-to-one and required — a Trainer row
+// cannot exist without a backing User, and is never auto-created (no
+// implicit side effect on a User's role changing to TRAINER, unlike the
+// Member portal auto-link precedent in AuthService.register — an owner
+// explicitly opts a staff member into coaching via POST /trainers).
+// ---------------------------------------------------------------------------
+model Trainer {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Must reference a User with role = TRAINER in this tenant — enforced in
+  /// TrainersService, not the DB (mirrors Member.trainerId's own approach).
+  userId String @unique @map("user_id")
+  user   User   @relation("TrainerProfile", fields: [userId], references: [id], onDelete: Cascade)
+
+  bio                    String?
+  /// Free text tags (e.g. "Powerlifting", "Yoga") — an open set, matching
+  /// how the approved frontend treats specialties; not a closed enum.
+  specialties            String[]
+  certifications         String[]
+  yearsExperience        Int?          @map("years_experience")
+  status                 TrainerStatus @default(ACTIVE)
+  /// Whether this trainer can be booked for 1:1 Personal Training sessions
+  /// at all, independent of whether they currently have any availability
+  /// windows set — lets an owner temporarily hide a trainer from PT
+  /// discovery without deleting their availability data.
+  offersPersonalTraining Boolean       @default(true) @map("offers_personal_training")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  availability TrainerAvailability[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("trainers")
+}
+
+// ---------------------------------------------------------------------------
+// TrainerAvailability — recurring weekly windows in which a trainer can be
+// booked for Personal Training (mirrors the approved frontend's
+// TrainerAvailabilitySlot / "Availability" page 1:1: members only see PT
+// slots inside these windows that don't clash with a class the trainer
+// teaches or a session they already have booked — see
+// PtSessionsService.getAvailableSlots). Deliberately NOT used to gate class
+// assignment — a trainer's classes are scheduled directly on ClassSeries;
+// this table only governs 1:1 PT bookability, matching the approved UI's
+// own framing ("Set the hours members can book personal training sessions
+// with you").
+// ---------------------------------------------------------------------------
+model TrainerAvailability {
+  id        String    @id @default(uuid())
+  trainerId String    @map("trainer_id")
+  trainer   Trainer   @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  dayOfWeek DayOfWeek @map("day_of_week")
+  /// "HH:mm", 24-hour, trainer's local gym time — matches every other
+  /// time-of-day field in this phase (ClassSeries/ClassOccurrence).
+  startTime String    @map("start_time")
+  endTime   String    @map("end_time")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([trainerId, dayOfWeek])
+  @@map("trainer_availability")
+}
+
+/// ACTIVE — currently running, generating future occurrences.
+/// CANCELLED — the whole recurring class has been withdrawn (distinct from
+///   cancelling a single ClassOccurrence): no further occurrences are
+///   generated past the cancellation, and any already-generated future
+///   SCHEDULED occurrences are cancelled along with it — see
+///   ClassesService.cancelSeries.
+enum ClassSeriesStatus {
+  ACTIVE
+  CANCELLED
+
+  @@map("class_series_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassSeries — the recurring class TEMPLATE an owner/manager authors
+// (name/category/trainer/day-of-week/time/capacity/location). See the
+// phase-level comment above for why occurrences are a separate table
+// generated lazily rather than this table being booked directly.
+// ---------------------------------------------------------------------------
+model ClassSeries {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  /// Free text (e.g. "HIIT", "Yoga", "Spin") — an open set members/owners
+  /// can extend, not a closed enum; matches the Trainer.specialties choice.
+  category    String
+  description String?
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("ClassTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+
+  dayOfWeek       DayOfWeek @map("day_of_week")
+  startTime       String    @map("start_time")
+  /// Minutes — the frontend's own GymClass.duration field, kept as the
+  /// source of truth for a session's length rather than storing endTime
+  /// twice (endTime is derived, e.g. for conflict-window checks).
+  durationMinutes Int       @map("duration_minutes")
+
+  capacity Int
+  location String
+
+  status ClassSeriesStatus @default(ACTIVE)
+
+  /// The date this recurrence begins (inclusive) — occurrences are never
+  /// generated before it even if it falls on the matching dayOfWeek.
+  startDate DateTime  @map("start_date")
+  /// Inclusive end date, or null for an open-ended recurring class. A
+  /// one-off class sets this equal to startDate.
+  endDate   DateTime? @map("end_date")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  occurrences ClassOccurrence[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, trainerId])
+  @@map("class_series")
+}
+
+/// SCHEDULED — normal, bookable (subject to capacity/date rules).
+/// CANCELLED — this specific date was called off (trainer sick, holiday,
+///   etc.) without cancelling the whole recurring series; existing
+///   bookings are cancelled along with it — see ClassesService.cancelOccurrence.
+/// COMPLETED — reserved for the later Attendance phase to mark once a
+///   session's actual roster has been taken; nothing in this phase sets it.
+enum ClassOccurrenceStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+
+  @@map("class_occurrence_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassOccurrence — one dated, actually-bookable instance of a ClassSeries.
+// trainerId/location/capacity are copied from the series at generation time
+// but can be overridden per-occurrence (a substitute trainer covering one
+// session, a one-off room change) without touching the template. tenantId
+// is denormalized from the series purely so every tenant-scoped query here
+// (list/find) can filter directly without an extra join, matching this
+// schema's existing convention of every tenant-owned table carrying its own
+// tenantId column.
+// ---------------------------------------------------------------------------
+model ClassOccurrence {
+  id            String      @id @default(uuid())
+  tenantId      String      @map("tenant_id")
+  classSeriesId String      @map("class_series_id")
+  classSeries   ClassSeries @relation(fields: [classSeriesId], references: [id], onDelete: Cascade)
+
+  /// Calendar date only (time-of-day lives in startTime/endTime below) —
+  /// stored at UTC midnight, matching how joinedOn/other date-only columns
+  /// in this schema are handled.
+  date      DateTime
+  startTime String   @map("start_time")
+  endTime   String   @map("end_time")
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("ClassOccurrenceTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+  location  String
+  capacity  Int
+
+  status          ClassOccurrenceStatus @default(SCHEDULED)
+  cancelledReason String?               @map("cancelled_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  bookings ClassBooking[]
+
+  @@unique([classSeriesId, date])
+  @@index([tenantId, date])
+  @@index([trainerId, date])
+  @@map("class_occurrences")
+}
+
+/// CONFIRMED — holds a seat.
+/// WAITLISTED — no seat available at booking time; promoted to CONFIRMED
+///   automatically, FIFO by booking order, when a seat frees up — see
+///   ClassBookingsService.cancel.
+/// CANCELLED — withdrawn, by the member or by staff/class cancellation; the
+///   row is kept (and reused on rebooking — see the phase-level comment)
+///   rather than deleted, so booking history survives.
+/// ATTENDED / NO_SHOW — reserved for the later Attendance phase to set once
+///   roll is taken; nothing in this phase transitions a booking into either
+///   state, but the values exist now so Attendance doesn't need a schema
+///   migration of its own just to record outcomes on this table.
+enum ClassBookingStatus {
+  CONFIRMED
+  WAITLISTED
+  CANCELLED
+  ATTENDED
+  NO_SHOW
+
+  @@map("class_booking_status")
+}
+
+// ---------------------------------------------------------------------------
+// ClassBooking — a member's booking against one ClassOccurrence. See the
+// phase-level comment for the row-reuse-on-rebook design and the
+// concurrency approach used to keep capacity/waitlist accounting correct
+// under simultaneous requests.
+// ---------------------------------------------------------------------------
+model ClassBooking {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  classOccurrenceId String          @map("class_occurrence_id")
+  classOccurrence   ClassOccurrence @relation(fields: [classOccurrenceId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  status ClassBookingStatus @default(CONFIRMED)
+
+  transactions Transaction[]
+
+  /// Set/refreshed every time this row transitions into CONFIRMED or
+  /// WAITLISTED (including on rebook-after-cancel reusing this same row) —
+  /// distinct from createdAt, which only reflects the row's first-ever
+  /// insert and would otherwise misorder a rebooked member ahead of others
+  /// on the waitlist.
+  bookedAt    DateTime  @default(now()) @map("booked_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([classOccurrenceId, memberId])
+  @@index([tenantId, memberId])
+  @@index([classOccurrenceId, status])
+  @@map("class_bookings")
+}
+
+/// CONFIRMED — holds the slot.
+/// CANCELLED — withdrawn, by the member or by staff.
+/// COMPLETED / NO_SHOW — reserved for the later Attendance phase, same
+///   reasoning as ClassBookingStatus above.
+enum PtSessionStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+
+  @@map("pt_session_status")
+}
+
+// ---------------------------------------------------------------------------
+// PersonalTrainingSession — a member's 1:1 booking with a trainer, inside
+// one of that trainer's TrainerAvailability windows and free of conflicts
+// with the trainer's classes or other PT sessions (validated in
+// PtSessionsService, not the database — the same overlap-checking approach
+// used for ClassSeries trainer-conflict prevention). No payment/pricing
+// fields — see the phase's explicit instruction not to implement PT payment
+// processing yet.
+// ---------------------------------------------------------------------------
+model PersonalTrainingSession {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  trainerId String @map("trainer_id")
+  trainer   User   @relation("PtSessionTrainer", fields: [trainerId], references: [id], onDelete: Restrict)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// Calendar date only, same convention as ClassOccurrence.date.
+  date            DateTime
+  startTime       String   @map("start_time")
+  durationMinutes Int      @map("duration_minutes")
+
+  status PtSessionStatus @default(CONFIRMED)
+  notes  String?
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId])
+  @@index([trainerId, date])
+  @@map("personal_training_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Membership Plans, Member Memberships, Lifecycle & Renewals.
+// Two layers, the same pattern used throughout this schema (Trainer/User,
+// ClassSeries/ClassOccurrence): MembershipPlan is what the gym OFFERS;
+// MemberMembership is what a member actually HOLDS — one row per billing
+// period, never overwritten in place, so renewals/switches/cancellations
+// read back as real history rather than a single mutable pointer. See each
+// model's own comment for the reasoning behind their specific fields.
+// ---------------------------------------------------------------------------
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+
+  @@map("billing_period")
+}
+
+/// ACTIVE — offered to new signups and selectable for a renewal/switch.
+/// ARCHIVED — withdrawn from new signups ("Archive a plan" in the approved
+///   frontend), but never deleted: existing MemberMembership rows keep
+///   pointing to it (onDelete: Restrict below) so historical pricing and
+///   past periods stay intact. An archived plan's members keep it until
+///   their next renewal or switch — see MembershipsService's plan-active
+///   check, which only runs at create/renew time, never retroactively.
+enum PlanStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@map("plan_status")
+}
+
+// ---------------------------------------------------------------------------
+// MembershipPlan — what this gym offers. Deliberately minimal: price +
+// billing period + free-text perks, matching the approved frontend's own
+// MembershipPlan shape 1:1 (src/lib/data/types.ts) rather than inventing
+// numeric usage limits/entitlements nothing in the approved product
+// actually enforces ("1 free class credit / month" is descriptive copy,
+// not a metered limit anywhere in the booking flow). `billingPeriod` is
+// the plan's only notion of duration (1 or 12 months — see
+// billingPeriodToMonths in memberships.service.ts) rather than a separate
+// arbitrary-duration field, again matching what the product actually
+// offers instead of building flexibility nothing asks for yet.
+// ---------------------------------------------------------------------------
+model MembershipPlan {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  price         Decimal       @db.Decimal(10, 2)
+  billingPeriod BillingPeriod @map("billing_period")
+  /// Free-text marketing copy ("Unlimited group classes", "2 guest passes"),
+  /// not a metered/enforced limit — see the model comment.
+  perks         String[]
+  isPopular     Boolean       @default(false) @map("is_popular")
+  status        PlanStatus    @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships MemberMembership[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("membership_plans")
+}
+
+/// ACTIVE — this period is in effect or, once its startDate arrives, will
+///   be — see MembershipsService.computeEffectiveStatus for how PENDING /
+///   ACTIVE / EXPIRED are all derived purely from comparing today to
+///   [startDate, endDate] rather than stored here. Storing only three
+///   real states (this one, FROZEN, CANCELLED) means nothing ever needs a
+///   scheduled job to flip a row from ACTIVE to EXPIRED as time passes —
+///   the date range is the only source of truth for that, so it can never
+///   go stale.
+/// FROZEN — paused by staff; `frozenAt` records when, so unfreezing can
+///   extend `endDate` by the elapsed paused days (the member doesn't lose
+///   paid time they didn't use).
+/// CANCELLED — ended before its term; blocks access immediately regardless
+///   of `endDate`, which is left untouched as an honest historical record
+///   of what the original term would have been.
+enum MembershipRecordStatus {
+  ACTIVE
+  FROZEN
+  CANCELLED
+
+  @@map("membership_record_status")
+}
+
+// ---------------------------------------------------------------------------
+// MemberMembership — one row per billing period a member has held, ever.
+// Renewing NEVER mutates an existing row's dates in place (the schema-level
+// version of "preserve history, don't overwrite a current membership") —
+// it inserts a new row and links it back via `renewedFromId`, forming a
+// chain per member. "The member's current membership" is therefore not a
+// column anywhere; it's resolved at read time by MembershipsService (prefer
+// the row covering today, else the soonest upcoming PENDING one, else the
+// most recently lapsed one) — see its own comment for why a mutable
+// "isCurrent" flag was deliberately avoided.
+//
+// `planName`/`price`/`billingPeriod` are a snapshot taken at
+// creation/renewal time, independent of `plan`'s current values — a
+// member's payment history must keep showing what they actually paid even
+// after the gym changes that plan's price later. `paymentMethod` /
+// `paymentReference` are intentionally the only payment-shaped fields here:
+// forward-compatible references for the future Payments module to key off
+// of, not a payment/invoice model of their own — this phase explicitly
+// does not implement payment processing.
+// ---------------------------------------------------------------------------
+model MemberMembership {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  planId String         @map("plan_id")
+  plan   MembershipPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  /// Snapshot of the plan at the moment this period was purchased/renewed
+  /// — see the model comment.
+  planName      String        @map("plan_name")
+  price         Decimal       @db.Decimal(10, 2)
+  billingPeriod BillingPeriod @map("billing_period")
+
+  /// Calendar dates (UTC midnight), same convention as every other
+  /// date-only field in this schema (ClassOccurrence.date, etc.).
+  startDate DateTime @map("start_date")
+  endDate   DateTime @map("end_date")
+
+  status   MembershipRecordStatus @default(ACTIVE)
+  frozenAt DateTime?              @map("frozen_at")
+
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason")
+
+  /// Forward-compatible references for the future Payments module — see
+  /// the model comment. Not validated/processed here.
+  paymentMethod    String? @map("payment_method")
+  paymentReference String? @map("payment_reference")
+
+  /// The period this one renewed from, if any — null for a member's very
+  /// first membership. Unique: one period is renewed into at most one
+  /// next period, forming a simple chain rather than a tree.
+  renewedFromId String?           @unique @map("renewed_from_id")
+  renewedFrom   MemberMembership? @relation("MembershipRenewal", fields: [renewedFromId], references: [id], onDelete: SetNull)
+  renewedInto   MemberMembership? @relation("MembershipRenewal")
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId])
+  @@index([tenantId, status])
+  @@index([tenantId, endDate])
+  @@index([planId])
+  @@map("member_memberships")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 — Payments, Billing, Transactions, Invoices & Refunds. A single
+// reusable financial layer every business module (Memberships today;
+// Classes/PT/Store later) records against, rather than each owning its own
+// payment logic. Three tables, deliberately not more:
+//
+//   Transaction — one row per payment ATTEMPT-AND-RESULT. In this product
+//     every charge is requested and attempted in the same instant (there is
+//     no approved-frontend flow that creates a standing "charge" and
+//     attempts payment against it later, nor a cart that bundles several
+//     charges into one bill), so a separate "Charge"/"Order" entity above
+//     Transaction would model a distinction this product doesn't actually
+//     have yet — see TransactionsService's own file comment for the fuller
+//     reasoning. A retry is simply a new Transaction row, not a resumed
+//     attempt on a shared parent.
+//   Invoice — the billing DOCUMENT, one-to-one with a Transaction, always
+//     generated alongside it (even for a pending/failed one — the approved
+//     frontend's own Payment rows always carry an invoiceId regardless of
+//     status). Kept a distinct table from Transaction specifically because
+//     they answer different questions (what was billed/owed, with line
+//     items and tax/discount math vs. what was attempted and its outcome)
+//     even though today they're created together 1:1.
+//   Refund — its own table, not just a status flip on Transaction, because
+//     multiple partial refunds can apply against one transaction and each
+//     needs its own amount/reason/timestamp/authorizer.
+//
+// Deliberately NOT here: real payment-gateway integration (`provider`/
+// `providerReference` on Transaction and `status: PENDING` on Refund exist
+// as the seam a later phase plugs a real gateway into — see the README),
+// a general Charge/Order/cart model, and any change to how Memberships
+// computes its own state — Memberships stays responsible for membership
+// lifecycle, Payments stays responsible for financial state; the only
+// link between them is MembershipsService calling
+// TransactionsService.record() and storing the resulting relation id.
+// ---------------------------------------------------------------------------
+
+/// MEMBERSHIP_PURCHASE / MEMBERSHIP_RENEWAL — split (not one "Membership"
+///   type) because Reports wants to tell new revenue from repeat revenue,
+///   and this backend can now record that directly instead of inferring it
+///   with a heuristic the way the approved frontend's isRenewalPayment
+///   guesses from timing. Only these two currently get their
+///   `relatedMembershipId` populated (see MembershipsService).
+/// PERSONAL_TRAINING / CLASS_SESSION — schema-ready via
+///   `relatedPtSessionId`/`relatedClassBookingId`, mirroring the approved
+///   frontend's Personal Training / Classes payment categories, but no
+///   call site creates one yet — wiring real PT/class charging is
+///   Classes/Bookings-module work, out of this phase's scope (see the
+///   README's known limitations).
+/// STORE_SALE — reserved for the future POS/Inventory phase.
+/// OTHER — free-standing charges (a guest pass, a one-off fee) with no
+///   related record at all, matching the approved frontend's own "Other"
+///   revenue category.
+enum TransactionType {
+  MEMBERSHIP_PURCHASE
+  MEMBERSHIP_RENEWAL
+  PERSONAL_TRAINING
+  CLASS_SESSION
+  STORE_SALE
+  OTHER
+
+  @@map("transaction_type")
+}
+
+/// CASH / CARD / UPI / BANK_TRANSFER — mirror the approved frontend's
+///   Payment.method union exactly.
+/// ONLINE — a bucket for a future real payment-gateway checkout, kept
+///   distinct from CARD (an in-person/manually-recorded card payment)
+///   since they'll eventually have very different provider plumbing.
+/// OTHER — real-world data entry the closed frontend set doesn't
+///   anticipate, same reasoning as LeadSource.OTHER elsewhere in this
+///   schema — purely additive.
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  BANK_TRANSFER
+  ONLINE
+  OTHER
+
+  @@map("payment_method")
+}
+
+/// PENDING — created but not yet settled (e.g. a bank transfer awaiting
+///   clearance) — mirrors the approved frontend's own pending-on-bank-
+///   transfer behavior exactly (see MembershipProvider.purchaseMembership).
+/// PROCESSING — a gateway attempt is in flight. Nothing sets this yet
+///   (no gateway integration this phase) — reserved for that seam.
+/// PAID — settled; the only status Reports/revenue calculations count,
+///   matching the approved frontend's own isRenewalPayment/revenue
+///   helpers, which only ever look at `status === "paid"`.
+/// FAILED — the attempt was declined/errored; `failureReason` holds why.
+/// CANCELLED — withdrawn before ever settling (a staff correction on a
+///   still-pending record) — distinct from FAILED (the attempt itself
+///   didn't succeed) and from REFUNDED (money was returned after having
+///   actually settled).
+/// PARTIALLY_REFUNDED / REFUNDED — derived from summing this
+///   transaction's Refund rows (see TransactionsService.refund) — never
+///   set directly by a caller.
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  PARTIALLY_REFUNDED
+  REFUNDED
+
+  @@map("transaction_status")
+}
+
+// ---------------------------------------------------------------------------
+// Transaction — see the phase-level comment above for why this is both
+// "the charge" and "the payment attempt/result" in one row for this
+// product, and TransactionsService's own comment for the full reasoning.
+// ---------------------------------------------------------------------------
+model Transaction {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  type        TransactionType
+  /// Human-readable line description (e.g. "Growth plan — renewal",
+  /// "Guest pass") — what actually shows on an invoice/receipt, since
+  /// `type` alone is too coarse for that ("MEMBERSHIP_RENEWAL" isn't
+  /// something a member should ever read).
+  description String
+
+  amount   Decimal @db.Decimal(10, 2)
+  /// Snapshotted from Tenant.currency at record time — see the model's own
+  /// reasoning on MembershipPlan/MemberMembership for why prices are
+  /// snapshotted rather than live-joined.
+  currency String
+
+  method PaymentMethod
+  status TransactionStatus @default(PENDING)
+
+  /// Set only when status = FAILED.
+  failureReason String? @map("failure_reason")
+
+  /// Forward-compatible references for a future real payment-gateway
+  /// integration — see the phase-level comment. Never read/written by
+  /// anything in this phase beyond being nullable pass-through fields.
+  providerName      String? @map("provider_name")
+  providerReference String? @map("provider_reference")
+
+  /// Lets a caller (e.g. a future retry-safe checkout flow) avoid creating
+  /// a duplicate transaction if the same request is replayed — see
+  /// TransactionsService.record(). Tenant-scoped, not global, since two
+  /// different gyms legitimately might generate the same client-side key.
+  idempotencyKey String? @map("idempotency_key")
+
+  /// At most one of these three is set, matching `type` — see the phase
+  /// comment on why this is modeled as one nullable FK per related-record
+  /// type rather than a generic polymorphic (type, id) pair: a handful of
+  /// fixed relation types, each wanting a real FK/referential-integrity
+  /// guarantee, not an open-ended set.
+  relatedMembershipId   String?                  @map("related_membership_id")
+  relatedMembership     MemberMembership?        @relation(fields: [relatedMembershipId], references: [id], onDelete: SetNull)
+  relatedPtSessionId    String?                  @map("related_pt_session_id")
+  relatedPtSession      PersonalTrainingSession? @relation(fields: [relatedPtSessionId], references: [id], onDelete: SetNull)
+  relatedClassBookingId String?                  @map("related_class_booking_id")
+  relatedClassBooking   ClassBooking?            @relation(fields: [relatedClassBookingId], references: [id], onDelete: SetNull)
+
+  /// Who performed the action that created this row — a staff member
+  /// recording a payment, or the member themself via self-service. Kept
+  /// for auditability; SetNull rather than Restrict since a departed
+  /// staff account being disabled must never block reading old financial
+  /// history.
+  recordedByUserId String? @map("recorded_by_user_id")
+  recordedByUser   User?   @relation(fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  paidAt      DateTime? @map("paid_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  invoice Invoice?
+  refunds Refund[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, memberId])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, createdAt])
+  @@map("transactions")
+}
+
+// ---------------------------------------------------------------------------
+// InvoiceCounter — one row per tenant, the atomic source of the next
+// sequential invoice number for that gym. A dedicated tiny table (rather
+// than a column on Tenant) so incrementing it is a single, obviously-safe
+// row-locked UPDATE with no risk of colliding with unrelated Tenant writes.
+// Numbering is per-tenant (each gym's own INV-000001, INV-000002, ...)
+// rather than one global sequence, so one tenant's invoice count is never
+// inferable from another's numbers and a busy gym never "uses up" a shared
+// range faster than a quiet one.
+// ---------------------------------------------------------------------------
+model InvoiceCounter {
+  tenantId   String @id @map("tenant_id")
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// The last invoice number actually issued for this tenant — see
+  /// InvoicesService.nextInvoiceNumber for how this is incremented and
+  /// read back atomically in the same transaction that creates the invoice.
+  lastNumber Int    @default(0) @map("last_number")
+
+  @@map("invoice_counters")
+}
+
+// ---------------------------------------------------------------------------
+// Invoice — the billing document for one Transaction (1:1 — see the
+// phase-level comment). `lineItems` is a small JSON array rather than its
+// own table for the same reasoning TenantSettings' JSON columns already
+// document in this schema: bounded, always read/written as a whole
+// document tied to one invoice, never queried into individually. No
+// `status` column — an invoice's payment status IS its transaction's
+// status; storing it twice would be a second source of truth that could
+// drift, so callers read `transaction.status` instead (see
+// InvoicesService/the response DTO).
+// ---------------------------------------------------------------------------
+model Invoice {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// Denormalized from the transaction purely so member-facing invoice
+  /// queries can filter directly without a join — the same convention
+  /// ClassOccurrence.tenantId already established in this schema.
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  transactionId String      @unique @map("transaction_id")
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  /// "INV-000123", unique per tenant — see InvoiceCounter. Never
+  /// client-supplied.
+  invoiceNumber String @map("invoice_number")
+
+  /// [{ description, quantity, unitPrice, amount }, ...] — see the model
+  /// comment on why this is JSON, not its own table.
+  lineItems Json @map("line_items")
+
+  subtotal       Decimal @db.Decimal(10, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(10, 2)
+  /// Always subtotal - discountAmount + taxAmount, reconciled at creation
+  /// time by InvoicesService — kept as its own column (not computed at
+  /// read time) since it's the single number every invoice view needs and
+  /// the inputs never change after creation.
+  totalAmount    Decimal @map("total_amount") @db.Decimal(10, 2)
+
+  issueDate DateTime  @default(now()) @map("issue_date")
+  /// Nullable — most transactions here are paid at the moment they're
+  /// created, so "when is this due" rarely applies; kept for a pending
+  /// (e.g. bank-transfer) payment where it genuinely does.
+  dueDate   DateTime? @map("due_date")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, memberId])
+  @@map("invoices")
+}
+
+/// COMPLETED — the refund has taken effect. The only status this phase's
+///   own code ever sets (no real gateway to fail or delay it yet — see the
+///   phase-level comment), issued the same instant it's created, matching
+///   the approved frontend's own instant confirm-and-done refund flow.
+/// PENDING / FAILED — reserved for a future real payment-gateway
+///   integration, where a refund can be requested but take time to
+///   process or can itself fail; the seam this phase leaves for that.
+enum RefundStatus {
+  PENDING
+  COMPLETED
+  FAILED
+
+  @@map("refund_status")
+}
+
+// ---------------------------------------------------------------------------
+// Refund — one row per refund issued against a Transaction; a transaction
+// can accumulate several partial ones. See TransactionsService.refund for
+// how the parent transaction's status (PARTIALLY_REFUNDED vs REFUNDED) is
+// derived from summing this table rather than stored redundantly here too.
+// ---------------------------------------------------------------------------
+model Refund {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  transactionId String      @map("transaction_id")
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+
+  amount Decimal      @db.Decimal(10, 2)
+  reason String?
+  status RefundStatus @default(COMPLETED)
+
+  /// The staff member (or, in principle, a future automated process) who
+  /// authorized this refund — SetNull for the same reason
+  /// Transaction.recordedByUserId is: a disabled account must never block
+  /// reading old financial history.
+  processedByUserId String? @map("processed_by_user_id")
+  processedByUser   User?   @relation(fields: [processedByUserId], references: [id], onDelete: SetNull)
+
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId, transactionId])
+  @@map("refunds")
 }

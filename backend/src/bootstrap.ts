@@ -3,6 +3,7 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 
 /**
@@ -15,6 +16,9 @@ import helmet from 'helmet';
 export function configureApp(app: INestApplication, configService: ConfigService): void {
   app.use(helmet());
   app.use(compression());
+  // Only used to read the httpOnly refresh-token cookie — never signed
+  // cookies, so no secret needed here.
+  app.use(cookieParser());
 
   app.enableCors({
     origin: configService.get<string[]>('security.corsOrigins'),
@@ -42,6 +46,11 @@ export function setupSwagger(app: INestApplication): void {
     )
     .setVersion('1.0')
     .addBearerAuth()
+    .addCookieAuth('refresh_token', {
+      type: 'apiKey',
+      in: 'cookie',
+      description: 'httpOnly refresh-token cookie, set by /auth/login and /auth/register.',
+    })
     .build();
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('api/docs', app, swaggerDocument);

@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PrismaService } from '../../prisma/prisma.service.js';
+import { UsersService } from '../../users/users.service.js';
 import type {
   AuthenticatedUser,
   JwtPayload,
@@ -18,7 +18,7 @@ import type {
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     configService: ConfigService,
-    private readonly prisma: PrismaService,
+    private readonly usersService: UsersService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -28,9 +28,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    const user = await this.usersService.findByIdWithTenantStatus(payload.sub);
 
-    if (!user || user.deletedAt || user.status !== 'ACTIVE') {
+    if (!user || user.deletedAt || user.status !== 'ACTIVE' || user.tenant.deletedAt) {
       throw new UnauthorizedException('This account is no longer active.');
     }
 
@@ -39,6 +39,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       tenantId: user.tenantId,
       email: user.email,
       role: user.role,
+      // Not enforced here — see TenantStatusGuard, which can exempt specific
+      // routes (e.g. an owner reversing their own gym's pause) that a blanket
+      // rejection at this layer couldn't.
+      tenantStatus: user.tenant.status,
     };
   }
 }

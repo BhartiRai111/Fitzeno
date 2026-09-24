@@ -38,6 +38,16 @@ class EnvironmentVariables {
   @Min(60)
   JWT_ACCESS_TOKEN_TTL_SECONDS: number = 900;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  JWT_REFRESH_TOKEN_TTL_DAYS: number = 30;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  PASSWORD_RESET_TTL_HOURS: number = 2;
+
   @IsString()
   CORS_ORIGIN: string = 'http://localhost:3000';
 

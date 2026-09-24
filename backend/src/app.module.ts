@@ -9,12 +9,25 @@ import securityConfig from './config/security.config.js';
 import { validate } from './config/env.validation.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthzModule } from './authz/authz.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
 import { RolesGuard } from './common/guards/roles.guard.js';
+import { TenantStatusGuard } from './common/guards/tenant-status.guard.js';
+import { PermissionsGuard } from './authz/permissions.guard.js';
+import { TenantsModule } from './tenants/tenants.module.js';
+import { MembersModule } from './members/members.module.js';
+import { LeadsModule } from './leads/leads.module.js';
+import { TrainersModule } from './trainers/trainers.module.js';
+import { ClassesModule } from './classes/classes.module.js';
+import { ClassBookingsModule } from './class-bookings/class-bookings.module.js';
+import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
+import { MembershipPlansModule } from './membership-plans/membership-plans.module.js';
+import { MembershipsModule } from './memberships/memberships.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 
 @Module({
   imports: [
@@ -37,6 +50,17 @@ import { RolesGuard } from './common/guards/roles.guard.js';
     }),
     PrismaModule,
     AuthModule,
+    AuthzModule,
+    TenantsModule,
+    MembersModule,
+    LeadsModule,
+    TrainersModule,
+    ClassesModule,
+    ClassBookingsModule,
+    PtSessionsModule,
+    MembershipPlansModule,
+    MembershipsModule,
+    PaymentsModule,
     HealthModule,
   ],
   providers: [
@@ -48,7 +72,9 @@ import { RolesGuard } from './common/guards/roles.guard.js';
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: TenantStatusGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule {}
