@@ -25,6 +25,8 @@ import { TrainersModule } from './trainers/trainers.module.js';
 import { ClassesModule } from './classes/classes.module.js';
 import { ClassBookingsModule } from './class-bookings/class-bookings.module.js';
 import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
+import { MembershipPlansModule } from './membership-plans/membership-plans.module.js';
+import { MembershipsModule } from './memberships/memberships.module.js';
 
 @Module({
   imports: [
@@ -55,6 +57,8 @@ import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
     ClassesModule,
     ClassBookingsModule,
     PtSessionsModule,
+    MembershipPlansModule,
+    MembershipsModule,
     HealthModule,
   ],
   providers: [

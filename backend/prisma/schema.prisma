@@ -95,14 +95,16 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users         User[]
-  settings      TenantSettings?
-  members       Member[]
-  leads         Lead[]
-  trainers      Trainer[]
-  classSeries   ClassSeries[]
-  classBookings ClassBooking[]
-  ptSessions    PersonalTrainingSession[]
+  users             User[]
+  settings          TenantSettings?
+  members           Member[]
+  leads             Lead[]
+  trainers          Trainer[]
+  classSeries       ClassSeries[]
+  classBookings     ClassBooking[]
+  ptSessions        PersonalTrainingSession[]
+  membershipPlans   MembershipPlan[]
+  memberMemberships MemberMembership[]
 
   @@map("tenants")
 }
@@ -403,6 +405,7 @@ model Member {
   notes         MemberNote[]
   classBookings ClassBooking[]
   ptSessions    PersonalTrainingSession[]
+  memberships   MemberMembership[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -898,4 +901,164 @@ model PersonalTrainingSession {
   @@index([tenantId, memberId])
   @@index([trainerId, date])
   @@map("personal_training_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Membership Plans, Member Memberships, Lifecycle & Renewals.
+// Two layers, the same pattern used throughout this schema (Trainer/User,
+// ClassSeries/ClassOccurrence): MembershipPlan is what the gym OFFERS;
+// MemberMembership is what a member actually HOLDS — one row per billing
+// period, never overwritten in place, so renewals/switches/cancellations
+// read back as real history rather than a single mutable pointer. See each
+// model's own comment for the reasoning behind their specific fields.
+// ---------------------------------------------------------------------------
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+
+  @@map("billing_period")
+}
+
+/// ACTIVE — offered to new signups and selectable for a renewal/switch.
+/// ARCHIVED — withdrawn from new signups ("Archive a plan" in the approved
+///   frontend), but never deleted: existing MemberMembership rows keep
+///   pointing to it (onDelete: Restrict below) so historical pricing and
+///   past periods stay intact. An archived plan's members keep it until
+///   their next renewal or switch — see MembershipsService's plan-active
+///   check, which only runs at create/renew time, never retroactively.
+enum PlanStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@map("plan_status")
+}
+
+// ---------------------------------------------------------------------------
+// MembershipPlan — what this gym offers. Deliberately minimal: price +
+// billing period + free-text perks, matching the approved frontend's own
+// MembershipPlan shape 1:1 (src/lib/data/types.ts) rather than inventing
+// numeric usage limits/entitlements nothing in the approved product
+// actually enforces ("1 free class credit / month" is descriptive copy,
+// not a metered limit anywhere in the booking flow). `billingPeriod` is
+// the plan's only notion of duration (1 or 12 months — see
+// billingPeriodToMonths in memberships.service.ts) rather than a separate
+// arbitrary-duration field, again matching what the product actually
+// offers instead of building flexibility nothing asks for yet.
+// ---------------------------------------------------------------------------
+model MembershipPlan {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  price         Decimal       @db.Decimal(10, 2)
+  billingPeriod BillingPeriod @map("billing_period")
+  /// Free-text marketing copy ("Unlimited group classes", "2 guest passes"),
+  /// not a metered/enforced limit — see the model comment.
+  perks         String[]
+  isPopular     Boolean       @default(false) @map("is_popular")
+  status        PlanStatus    @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships MemberMembership[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("membership_plans")
+}
+
+/// ACTIVE — this period is in effect or, once its startDate arrives, will
+///   be — see MembershipsService.computeEffectiveStatus for how PENDING /
+///   ACTIVE / EXPIRED are all derived purely from comparing today to
+///   [startDate, endDate] rather than stored here. Storing only three
+///   real states (this one, FROZEN, CANCELLED) means nothing ever needs a
+///   scheduled job to flip a row from ACTIVE to EXPIRED as time passes —
+///   the date range is the only source of truth for that, so it can never
+///   go stale.
+/// FROZEN — paused by staff; `frozenAt` records when, so unfreezing can
+///   extend `endDate` by the elapsed paused days (the member doesn't lose
+///   paid time they didn't use).
+/// CANCELLED — ended before its term; blocks access immediately regardless
+///   of `endDate`, which is left untouched as an honest historical record
+///   of what the original term would have been.
+enum MembershipRecordStatus {
+  ACTIVE
+  FROZEN
+  CANCELLED
+
+  @@map("membership_record_status")
+}
+
+// ---------------------------------------------------------------------------
+// MemberMembership — one row per billing period a member has held, ever.
+// Renewing NEVER mutates an existing row's dates in place (the schema-level
+// version of "preserve history, don't overwrite a current membership") —
+// it inserts a new row and links it back via `renewedFromId`, forming a
+// chain per member. "The member's current membership" is therefore not a
+// column anywhere; it's resolved at read time by MembershipsService (prefer
+// the row covering today, else the soonest upcoming PENDING one, else the
+// most recently lapsed one) — see its own comment for why a mutable
+// "isCurrent" flag was deliberately avoided.
+//
+// `planName`/`price`/`billingPeriod` are a snapshot taken at
+// creation/renewal time, independent of `plan`'s current values — a
+// member's payment history must keep showing what they actually paid even
+// after the gym changes that plan's price later. `paymentMethod` /
+// `paymentReference` are intentionally the only payment-shaped fields here:
+// forward-compatible references for the future Payments module to key off
+// of, not a payment/invoice model of their own — this phase explicitly
+// does not implement payment processing.
+// ---------------------------------------------------------------------------
+model MemberMembership {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  planId String         @map("plan_id")
+  plan   MembershipPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  /// Snapshot of the plan at the moment this period was purchased/renewed
+  /// — see the model comment.
+  planName      String        @map("plan_name")
+  price         Decimal       @db.Decimal(10, 2)
+  billingPeriod BillingPeriod @map("billing_period")
+
+  /// Calendar dates (UTC midnight), same convention as every other
+  /// date-only field in this schema (ClassOccurrence.date, etc.).
+  startDate DateTime @map("start_date")
+  endDate   DateTime @map("end_date")
+
+  status   MembershipRecordStatus @default(ACTIVE)
+  frozenAt DateTime?              @map("frozen_at")
+
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason")
+
+  /// Forward-compatible references for the future Payments module — see
+  /// the model comment. Not validated/processed here.
+  paymentMethod    String? @map("payment_method")
+  paymentReference String? @map("payment_reference")
+
+  /// The period this one renewed from, if any — null for a member's very
+  /// first membership. Unique: one period is renewed into at most one
+  /// next period, forming a simple chain rather than a tree.
+  renewedFromId String?           @unique @map("renewed_from_id")
+  renewedFrom   MemberMembership? @relation("MembershipRenewal", fields: [renewedFromId], references: [id], onDelete: SetNull)
+  renewedInto   MemberMembership? @relation("MembershipRenewal")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId])
+  @@index([tenantId, status])
+  @@index([tenantId, endDate])
+  @@index([planId])
+  @@map("member_memberships")
 }

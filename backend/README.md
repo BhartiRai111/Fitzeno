@@ -706,6 +706,152 @@ own `tenantId` column (denormalized from their parent `ClassSeries`/
 here can filter directly without an extra join, matching this schema's
 existing convention.
 
+### Membership Plans, Member Memberships, Lifecycle & Renewals
+
+The core commercial relationship: *Plan Creation → Plan Selection →
+Membership Creation → Active Membership → Expiry Approaching → Renewal →
+Membership History*. Two new modules (`membership-plans/`, `memberships/`),
+two new tables, no Payments/Attendance/Notifications changes (still later
+phases — see below).
+
+**`MembershipPlan` vs `MemberMembership` — what the gym OFFERS vs what a
+member HOLDS**, the same two-layer split used throughout this backend
+(Trainer/User, ClassSeries/ClassOccurrence). `MembershipPlan` is
+deliberately minimal — name, price, `billingPeriod` (`MONTHLY`/`YEARLY`,
+its only notion of duration), free-text `perks`, `isPopular` — matching the
+approved frontend's own `MembershipPlan` shape 1:1 rather than inventing
+numeric usage limits/entitlements nothing in the approved product actually
+enforces ("1 free class credit / month" is descriptive copy, not a metered
+limit anywhere in the booking flow this backend already has). A plan is
+never hard-deleted, only archived (`PlanStatus.ARCHIVED`) — there's no
+`DELETE` endpoint at all, matching the approved frontend's own "Archive a
+plan" action and its copy ("Existing members keep this plan until they
+renew or switch. New signups won't see it.") exactly: an archived plan is
+excluded from browsing/new signups and rejected as a target for a *new*
+create or renewal, but existing `MemberMembership` rows referencing it are
+completely untouched, and the plan itself stays for their pricing history.
+
+**`MemberMembership` is one row per billing period a member has ever
+held — never a single mutable "current membership" pointer.** Renewing
+never mutates a row's dates in place; it inserts a **new** row and links
+it back via `renewedFromId`, forming a simple chain per member (this is
+the schema-level answer to *"preserve history, don't overwrite the current
+membership"*). There is deliberately no `isCurrent` flag or FK anywhere
+pointing at "the" active membership — a mutable flag like that is a second
+source of truth that has to be kept in sync on every write and can drift.
+Instead, "the member's current membership" is resolved **at read time**
+(`MembershipsService.getCurrentForMember`): prefer a period actually
+covering today, else a frozen one (still theirs, paused), else the
+soonest upcoming scheduled one, else — for a member with nothing current —
+their most recently lapsed period, so the UI always has something
+sensible to show even for someone who's fully cancelled/expired.
+
+**Lifecycle status is deliberately minimal and mostly date-derived.**
+`MemberMembership.status` stores only three real states —
+`ACTIVE`, `FROZEN`, `CANCELLED` — never `PENDING` or `EXPIRED`. Those two
+(plus the "still `ACTIVE`" case itself) are computed purely by comparing
+today to `[startDate, endDate]`
+(`computeEffectiveStatus`/`EffectiveMembershipStatus` in
+`memberships/dto/membership-response.dto.ts`): a future `startDate` reads
+as `PENDING`, a past `endDate` reads as `EXPIRED`, otherwise `ACTIVE`.
+This means **nothing needs a scheduled job to flip a row from ACTIVE to
+EXPIRED as time passes** — the date range is the only source of truth for
+that transition, so it can never go stale the way a cron-maintained status
+column could. "Expiring soon" is the same idea one layer up: not a stored
+value at all, just `effectiveStatus === 'ACTIVE' && daysRemaining <= 14`
+on the response, and the same 14-day threshold doubles as the `EXPIRING`
+filter value on `GET /memberships?effectiveStatus=` (translated to a
+bounded `endDate` window server-side — see
+`MembershipsService.effectiveStatusWhere`) for the owner's Expiring tab, a
+computed filter with no stored column behind it, the same pattern
+`LeadsService.list`'s `followUpDueBy` filter already established.
+`CANCELLED` blocks access immediately regardless of `endDate`, which is
+left untouched as an honest historical record of what the original term
+would have been.
+
+**Renewal math** (`MembershipsService.renew` / the self-service
+`purchaseOrRenewForSelf`, which is always "renew if the member has
+anything non-cancelled, otherwise create fresh" — mirroring the approved
+frontend's own single unified `purchaseMembership()` action that never
+distinguishes "buying for the first time" from "renewing" at the UI
+layer): if the current period's `endDate` is still in the future, the new
+period starts the day *after* it (stacking, no gap, no shared boundary
+day); if it's already in the past, the new period starts fresh from
+today. This is deliberately equivalent to — but not a literal copy of —
+the approved frontend's own `computeNextExpiry` helper, adapted for a
+real two-field `[startDate, endDate]` model instead of a single mutable
+`expiresOn`. A renewal can switch to a different `MembershipPlan` in the
+same call (a "switch" is just a renewal whose target plan differs from
+the current one — again matching the frontend's unified
+renew-or-switch dialog, which only changes its button label, never its
+underlying logic, based on that comparison). The target plan must be
+`ACTIVE` at renewal time — this is what actually implements "existing
+members keep an archived plan until they renew or switch": nothing
+retroactively invalidates their current row, but they can't renew *onto*
+an archived one. Renewing a period that's already been renewed into a
+later one is rejected (`ConflictException`) — the chain stays a simple
+linked list, never branching.
+
+**Freeze/unfreeze** is a real, if intentionally simple, business rule:
+freezing a currently-active membership sets `status = FROZEN` and records
+`frozenAt`; unfreezing extends `endDate` by the number of days it spent
+frozen (`daysBetween(frozenAt, today)`) and clears `frozenAt` — the
+member doesn't lose paid time they couldn't use while paused. Only a
+membership whose *effective* status is currently `ACTIVE` can be frozen
+(not a `PENDING` one that hasn't started, not an already-`FROZEN`/
+`CANCELLED`/`EXPIRED` one).
+
+**Overlap prevention.** A member can never hold two non-`CANCELLED`
+periods whose `[startDate, endDate]` ranges overlap
+(`MembershipsService.assertNoOverlap`) — enforced in application code (no
+Postgres exclusion constraint; that needs the `btree_gist` extension and
+raw SQL Prisma's schema DSL can't express, real over-engineering for this
+phase's scale) inside the same `runSerializableTransaction` helper the
+Classes/Bookings phase built, reused unchanged here for the same
+check-then-insert race the two phases share: two simultaneous renew/create
+calls for the same member must never both succeed. `POST /memberships`
+(staff-assigned, brand-new enrollment) explicitly rejects a member who
+already has a current period — direct staff to `POST /memberships/:id/renew`
+instead, which is exactly the create-vs-renew distinction the product
+needs. A `startDate` may be explicitly in the future (a membership
+scheduled to begin later), reading back as `PENDING` until that date
+arrives.
+
+**Pricing is snapshotted, not live-joined.** `planName`/`price`/
+`billingPeriod` are copied onto `MemberMembership` at creation/renewal
+time, independent of the plan's *current* values — a member's payment
+history must keep showing what they actually paid even after the gym
+changes that plan's price later. `paymentMethod`/`paymentReference` are
+the only payment-shaped fields on the model — plain forward-compatible
+references for the future Payments module to key off of, not a real
+payment/invoice entity of their own; this phase explicitly does not
+process payments.
+
+**Authorization** reuses the existing `MEMBERSHIPS` `PermissionArea`
+unchanged (from the authz phase — OWNER/MANAGER `MANAGE`, FRONT_DESK
+`VIEW`-only, TRAINER `NONE`) for every staff write/view. Reads members
+need — browsing plans, viewing their own current membership/history —
+carry **no permission gate at all**, the same precedent as `GET /trainers`
+and `GET /members/me`: a portal `MEMBER` has `NONE` on every
+`PermissionArea` and would otherwise be locked out entirely. `GET
+/membership-plans` additionally forces a `MEMBER` caller to `ACTIVE`-only
+plans regardless of any status filter passed, mirroring the `TRAINER`
+list-scoping precedent from Members/Leads (a role forcing its own
+effective filter, not a permission level). Freeze/cancel are staff-only
+actions — the approved frontend exposes no member-facing self-freeze/
+cancel UI, so none was built here either.
+
+**Reporting/notification compatibility.** `GET /memberships/stats`
+returns active/expiring/pending/expired/frozen/cancelled counts in one
+call — the same shape a future Owner dashboard card or Reports module
+would want, computed without loading full rows into memory. Every real
+lifecycle transition (create, renew, freeze, unfreeze, cancel) is its own
+single-purpose service method, specifically so a future notifications
+module ("membership created", "nearing expiry", "renewed", "expired")
+has a clean place to hook in later, the same reasoning
+`MembersService`/`LeadsService` already documented for their own
+single-purpose methods — nothing emits an event or sends anything today.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -762,21 +908,29 @@ records), and now **Trainers** (coaching profiles + weekly PT
 availability), **Classes/Scheduling** (recurring class templates + lazily
 generated dated occurrences, trainer-conflict prevention), **Class
 Bookings/Waitlist** (capacity-aware booking with FIFO waitlist promotion,
-concurrency-safe under simultaneous requests), and **Personal Training**
-(available-slot computation, booking, rescheduling, cancellation) — see
-the section above for the full model.
+concurrency-safe under simultaneous requests), **Personal Training**
+(available-slot computation, booking, rescheduling, cancellation), and now
+**Membership Plans** (create/update/archive/activate) and **Member
+Memberships** (creation, date-derived lifecycle, renewal with plan
+switching, freeze/unfreeze, cancellation, full per-member history via a
+renewal chain, concurrency-safe under simultaneous renewal/create) — see
+the sections above for the full model.
 
-**Not here, by design**: Memberships (plans, renewals, freezes, payments —
-`Member` deliberately carries none of this; class/PT booking eligibility
-uses `Member.status === ACTIVE` as an honest proxy until a real
-Memberships module exists), Attendance (booking statuses `ATTENDED`/
-`NO_SHOW` exist on `ClassBooking`/`PersonalTrainingSession` as schema
-groundwork, but nothing sets them yet — see the Trainers/Classes/Bookings
-section above), Payments (no PT session pricing/payment fields),
-Invoices, Notifications (booking-confirmed/cancelled, class-changed/
-cancelled, and waitlist-promotion are all real state transitions in the
-new services above, ready for a future notifications module to hook into,
-but nothing sends anything today), Reports, Inventory/POS, Expenses,
+**Not here, by design**: payment processing itself (`MemberMembership`
+carries only forward-compatible `paymentMethod`/`paymentReference`
+reference fields, not a real Payment/invoice entity — see the Memberships
+section above), Attendance (booking statuses `ATTENDED`/`NO_SHOW` exist on
+`ClassBooking`/`PersonalTrainingSession` as schema groundwork, but nothing
+sets them yet — see the Trainers/Classes/Bookings section above; class/PT
+booking eligibility still uses `Member.status === ACTIVE` rather than the
+new real membership data, since wiring that check is booking-module work
+out of this phase's scope), Invoices, Notifications
+(membership-created/nearing-expiry/renewed/expired and
+booking-confirmed/cancelled/class-changed/waitlist-promotion are all real
+state transitions in the services above, ready for a future notifications
+module to hook into, but nothing sends anything today), Reports (`GET
+/memberships/stats` exists as a first data source a future Reports module
+can consume, not a Reports module itself), Inventory/POS, Expenses,
 Audit/Activity, and any platform-level admin surface (the
 `TenantStatus.SUSPENDED` state and its enforcement exist, but nothing can
 set it yet). Every one of these is a real business domain the frontend
@@ -785,8 +939,8 @@ already has mock data and full UI for (see `../src/lib/data/*.ts` and
 Nest module in a later phase, built on this foundation — each carrying its
 own `tenantId` (following one of the patterns in
 [Tenant isolation](#tenant-isolation)) and FKs back to the
-identity/member/booking records established here, rather than duplicating
-any of them.
+identity/member/booking/membership records established here, rather than
+duplicating any of them.
 
 ## Development commands
 
@@ -884,3 +1038,23 @@ any of them.
   approved frontend's own constant), same reasoning as every other
   not-yet-configurable rule in this backend: genuinely supported by the
   product today, not invented ahead of a real need.
+- Class/PT booking eligibility still checks `Member.status === ACTIVE`,
+  not the new real `MemberMembership` data — wiring "does this member
+  currently hold an active membership" into the booking flow is
+  Classes/Bookings-module work, out of scope for this phase (see the
+  Membership Plans section above).
+- No `DELETE` on `MembershipPlan` — archiving is the only removal action,
+  by design (see the section above), but this also means a plan created
+  by mistake stays visible to staff in the archived list forever rather
+  than being truly removable.
+- Freezing doesn't pause/adjust a member's class or PT bookings — a frozen
+  membership still blocks new bookings only insofar as a future
+  Classes/Bookings-side eligibility check reads real membership data (see
+  the point above); it doesn't retroactively touch anything already
+  booked.
+- No per-tenant configuration of the 14-day "expiring soon" threshold —
+  a hard-coded constant (`EXPIRING_SOON_THRESHOLD_DAYS`), same
+  not-yet-configurable reasoning as the cancellation window above.
+- `MembershipPlan.billingPeriod` only supports `MONTHLY`/`YEARLY` — matches
+  the approved frontend exactly; a quarterly or custom-duration plan would
+  need a schema change, not something the current product asks for.
