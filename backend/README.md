@@ -1041,6 +1041,182 @@ infrastructure (no webhook endpoint, no provider SDK, no secrets) —
 just enum values and a nullable key that a later phase can start actually
 setting without another migration reshaping this model.
 
+### Notifications & Communication
+
+One reusable in-app notification layer every business module delivers
+through — Bookings, Memberships, Payments, and Leads today; Attendance,
+Store, and Finance later — rather than each owning its own alerting. Three
+tables (`Notification`, `NotificationPreference`, `Announcement`), a new
+`notifications/` module, and an event/listener architecture that keeps
+every business service fully decoupled from notification delivery.
+
+**Event-driven, not a direct dependency.** A business service (e.g.
+`ClassBookingsService`) never imports `NotificationsService` — it injects
+`EventEmitter2` (made available app-wide by `EventEmitterModule.forRoot()`
+in `AppModule`, no per-module wiring needed) and emits a plain, typed
+domain event (`events/domain-events.ts`) after its own write has
+committed. `NotificationsEventListener` is the *only* thing that
+translates each event into actual `Notification` rows, deciding who
+should hear about it and what it should say — a decision that lives in
+exactly one place instead of being duplicated across every emitting
+module. This is deliberately the same shape the task asked for: *booking
+created → business event → notification service → recipient*, with
+`@nestjs/event-emitter`'s in-process pub/sub standing in for a message
+broker at a scale that doesn't need one yet (a single backend instance,
+no cross-service delivery guarantees required).
+
+**Events are only ever emitted after a transaction commits, never from
+inside one.** Several of the write paths that now emit an event
+(`ClassBookingsService.book`/`cancel`, `PtSessionsService.book`/
+`reschedule`, `MembershipsService.create`/`renewInternal`,
+`TransactionsService.record`/`refund`) run inside this codebase's
+existing `runSerializableTransaction` helper, which Postgres can abort
+and retry on a write conflict. Emitting from inside that callback would
+fire the event once per attempt, including attempts that were thrown
+away — a phantom notification for state that was never actually
+committed. Every emit call in this phase was deliberately moved to
+*after* the enclosing `await runSerializableTransaction(...)` resolves,
+using the transaction's own return value, not from inside the callback.
+
+**A failed notification can never fail the business operation, or crash
+the process.** `EventEmitter2`'s plain `.emit()` (used at every call
+site) does not await async listeners — so an uncaught rejection inside a
+listener would become an unhandled promise rejection at the process
+level, which modern Node.js terminates on by default. Every handler in
+`NotificationsEventListener` therefore runs through a small `guard()`
+wrapper that catches and logs instead of letting an error escape: a
+booking, a payment, a membership renewal must never fail — or bring the
+whole server down — because writing its notification row failed.
+
+**`Notification` — the one place read/unread, priority, and deep-link
+context live.** The recipient is always a `User` (a login identity),
+never a `Member`/`Trainer` directly — a member with no linked portal
+login simply has nothing to receive an in-app notification with, which
+`NotificationsService.notifyMember`/`notifyMembers` treat as a normal,
+silent no-op rather than an error. `readAt` (nullable) is the single
+source of truth for read/unread state — no separate boolean that could
+drift from it. `relatedEntityType`/`relatedEntityId` + `actionUrl` carry
+deep-link context *without* becoming a side-channel around existing
+authorization: a row is only ever created for a recipient already
+entitled to see that entity (their own booking, their own membership,
+their own transaction — see each event's own recipient-resolution logic
+in the listener), so a client following the link still goes through that
+entity's normal authorized endpoint. `dedupKey` is null for ordinary
+event-driven notifications (which may legitimately repeat — two separate
+failed payments are two separate rows) and set only for scheduled
+reminders that must fire at most once per (recipient, milestone) — e.g.
+`membership:{id}:expiring:7d` — enforced by a real unique constraint
+(`@@unique([recipientUserId, dedupKey])`) rather than a separate
+"already sent" log table, the same idempotency-key pattern
+`Transaction.idempotencyKey` already established in this schema.
+`NotificationsService.notify()`'s bulk path (`createMany` +
+`skipDuplicates: true`) lets a scheduler job re-run safely (a partial
+run before a restart, an overlapping trigger) without a separate
+existence check.
+
+**Categories match what the approved frontend already renders, not
+every category it merely tolerates.** `NotificationCategory` mirrors the
+frontend's own set (`BOOKING`, `WAITLIST`, `CLASS`, `RENEWAL`, `PAYMENT`,
+`ATTENDANCE`, `LEAD`, `STAFF`, `ANNOUNCEMENT`, `PROMOTION`, `SYSTEM`) —
+`INVENTORY`/`EXPENSE` are deliberately omitted; the frontend tolerates an
+unknown-to-it category gracefully, but there's no Store/Finance module
+yet to emit one from, and adding a category later is a pure additive
+migration. `ATTENDANCE` and `STAFF` exist for the same schema-readiness
+reason: nothing in this phase sets `ClassBooking`/`PersonalTrainingSession`
+attendance status yet (see the Trainers/Classes/Bookings section), and
+there's no invite-pending-reminder infrastructure to wire `STAFF` to —
+inspecting the current module set and deciding what genuinely deserves a
+trigger today, rather than fabricating one, per the task's own
+instruction.
+
+**Membership lifecycle notifications reuse the same `RENEWAL` bucket the
+frontend already groups by**, rather than inventing a `MEMBERSHIP`
+category the frontend's own mock data never used — created, renewed,
+cancelled, expiring-soon, and expired all read as one bucket in the
+notification center, matching e.g. the approved frontend's own "Membership
+renews in 6 days" mock item.
+
+**Role-based delivery, computed from the same permission model this
+codebase already enforces, not a parallel one.** Payment-failure and
+unassigned-lead-follow-up broadcasts target `OWNER`/`MANAGER`/
+`FRONT_DESK` — the roles that default to `PAYMENTS`/`MEMBERS` `MANAGE` in
+`role-permissions.const.ts` — via `NotificationsService.notifyUsersByRoles`.
+This is a static, role-based target list, not a live per-user effective-
+permission computation (which would need a much heavier "list every user
+whose *current*, override-inclusive permission on area X is at least
+MANAGE" query this phase judged not worth building for a low-sensitivity,
+informational side-channel — the notification's own content never exposes
+anything that role wouldn't already be trusted to see via the real API).
+
+**`NotificationPreference` is a sparse per-(user, category) override
+table — the exact shape `PermissionOverride` already established** in
+the authz phase: a user with no row for a category gets that category's
+default (enabled); only an explicit opt-out is ever stored. Which
+categories are even offered as a toggle is role-scoped
+(`ROLE_NOTIFICATION_CATEGORIES` in `notification-rules.const.ts`),
+mirroring the approved frontend's own member/staff preference-channel
+split (`MemberNotificationChannelsDto`/`StaffNotificationChannelsDto`
+from the gym/tenant phase, which cover *tenant-wide default* channel
+toggles — a genuinely separate concern the `TenantSettings` schema
+comment already anticipated needing a per-user table for). `SYSTEM` is
+the one category `NotificationsService.updatePreferences` refuses to let
+any role disable — reserved for a structural/operational notice
+important enough that suppressing it would be a product bug, not a
+preference; nothing emits it yet, but the guard exists so a future
+trigger doesn't also need a preference-bypass mechanism built for it.
+Preference enforcement lives in exactly one place — `notify()`'s own
+`filterByPreference` step — so no caller can forget it.
+
+**`Announcement` is the record of a broadcast; delivery is just N
+`Notification` rows.** Matches the approved frontend's `SentAnnouncement`
+shape (audience label, recipient count, sender, timestamp) — there's no
+separate "did I see this announcement" tracking to keep in sync, since
+the fanned-out `Notification` rows' own `readAt` already answers that.
+Eight fixed audience shapes
+(`ALL_MEMBERS`/`ACTIVE_MEMBERS`/`EXPIRING_MEMBERS`/`PLAN_MEMBERS`/
+`ALL_TRAINERS`/`ALL_STAFF`/`TRAINERS_AND_STAFF`/`SPECIFIC_MEMBERS`)
+mirror `SendNotificationDialog`'s own audience picker exactly — no
+scheduling, no A/B, no per-recipient personalization, deliberately not a
+marketing-automation platform. `AnnouncementsService.resolveRecipientUserIds`
+is the single resolver both the real send and the
+`GET /announcements/audience-count` live preview call, so the "~N
+recipients" estimate the approved frontend already shows can never
+disagree with what actually gets delivered. `recipientCount` is a
+snapshot taken at send time (the same reasoning `MemberMembership`
+snapshots plan price at purchase time), not a value recomputed live
+later. The Announcement row and its notification fan-out are two
+separate writes, not one shared transaction — unlike the Payments
+module's financial writes, a brief window where the `Announcement` row
+exists slightly ahead of its `Notification` rows costs nothing real
+here (nothing treats `recipientCount` as a live invariant that must
+always match delivered rows to the row), so the extra complexity of a
+shared-transaction split wasn't judged worth it for this feature.
+
+**Scheduled reminders use `@nestjs/schedule`'s in-process cron, not an
+external queue.** `NotificationsSchedulerService` runs five daily jobs
+(`EVERY_DAY_AT_8AM`) across *all* tenants in one pass — a cron trigger has
+no per-request tenant context the way a controller does, so each job
+queries broadly and carries its own `tenantId` per row: membership
+expiry reminders at the 7-day and 1-day milestones only (not every day of
+the 14-day "expiring soon" window `MembershipsService` already computes —
+deliberately spam-avoiding, one heads-up a week out and one final nudge),
+a membership-expired notice the day the term lapses, upcoming class/PT
+session reminders the day before, and a lead-follow-up reminder the day
+it becomes due (assigned staff member directly, or a broadcast to
+lead-managing roles when nobody's assigned) — not a daily repeat for a
+lead that's been overdue for weeks (see Known limitations). Every job
+method is public and independently callable, not just `@Cron`-triggered
+— exactly what the e2e suite uses to exercise them deterministically
+instead of waiting on, or mocking, a real clock tick.
+
+**No real external delivery channel this phase, and none of the
+core domain had to bend to make room for one later.** In-app notifications
+are fully independent of any provider — the `Notification` table has no
+"was this emailed" column, no provider reference, nothing gateway-shaped.
+Adding email/SMS/push later means a new listener (or a new branch inside
+the existing one) that reads the same `Notification` row and calls a
+provider — the domain model itself doesn't need to change.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -1102,13 +1278,16 @@ concurrency-safe under simultaneous requests), **Personal Training**
 **Membership Plans** (create/update/archive/activate) and **Member
 Memberships** (creation, date-derived lifecycle, renewal with plan
 switching, freeze/unfreeze, cancellation, full per-member history via a
-renewal chain, concurrency-safe under simultaneous renewal/create), and
-now **Payments/Billing** (one reusable `Transaction` model for every
+renewal chain, concurrency-safe under simultaneous renewal/create),
+**Payments/Billing** (one reusable `Transaction` model for every
 charge type), **Invoices** (auto-generated 1:1 alongside every
 transaction, safe sequential numbering, owner search + member
-self-access), and **Refunds** (full/partial, concurrency-safe validation
-against what's actually still refundable) — see the sections above for
-the full model.
+self-access), **Refunds** (full/partial, concurrency-safe validation
+against what's actually still refundable), and now **Notifications &
+Communication** (an event-driven in-app notification layer covering
+booking/PT/membership/payment lifecycle events, per-user preferences,
+gym-wide announcements to eight targetable audiences, and five daily
+scheduled reminder jobs) — see the sections above for the full model.
 
 **Not here, by design**: a real payment gateway (Razorpay/Stripe/etc — see
 the Payments section above for the placeholder seams already in place: no
@@ -1118,11 +1297,10 @@ statuses `ATTENDED`/`NO_SHOW` exist on `ClassBooking`/
 — see the Trainers/Classes/Bookings section above; class/PT booking
 eligibility still uses `Member.status === ACTIVE` rather than the new real
 membership data, since wiring that check is booking-module work out of
-this phase's scope), Notifications
-(membership-created/nearing-expiry/renewed/expired and
-booking-confirmed/cancelled/class-changed/waitlist-promotion are all real
-state transitions in the services above, ready for a future notifications
-module to hook into, but nothing sends anything today), the full Reports
+this phase's scope, and the `ATTENDANCE` notification category has no
+trigger yet for the same reason), a real external notification channel
+(email/SMS/push — see the Notifications section above for why the core
+domain needs no redesign to add one later), the full Reports
 module (`GET /transactions/stats` and `GET /memberships/stats` exist as
 data sources a future Reports module can consume, not a Reports module
 itself), Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
@@ -1227,9 +1405,10 @@ duplicating any of them.
   server-side document behind it.
 - No dedicated audit/activity log yet — `MembersService`/`LeadsService`
   keep each meaningful action (create, status change, conversion, note) in
-  its own single-purpose method specifically so a future notifications or
-  audit module has a clean place to hook in, but nothing emits an event or
-  writes a log entry today.
+  its own single-purpose method, the same shape that made this phase's
+  event emission straightforward to add; a future audit module could hook
+  into the same event bus notifications now use, but nothing writes a log
+  entry today.
 - A `Member`'s `trainerId` is a single assignment, not a history — changing
   it overwrites the previous value with no record of who trained this
   member before. Worth revisiting if "trainer history" becomes a real
@@ -1277,3 +1456,41 @@ duplicating any of them.
 - `MembershipPlan.billingPeriod` only supports `MONTHLY`/`YEARLY` — matches
   the approved frontend exactly; a quarterly or custom-duration plan would
   need a schema change, not something the current product asks for.
+- No external delivery channel (email/SMS/push) for notifications yet —
+  everything is in-app only; see the Notifications section above for why
+  adding one later doesn't require touching the core domain.
+- Role-based staff broadcasts (payment-failure and unassigned-lead-
+  follow-up alerts) target a static role list
+  (`PAYMENT_ALERT_STAFF_ROLES`/`LEAD_ALERT_STAFF_ROLES`), not a live,
+  override-inclusive effective-permission computation — a staff member
+  whose `PermissionOverride` downgrades their `PAYMENTS`/`MEMBERS` access
+  below their role default still receives these alerts. Judged acceptable
+  for a low-sensitivity, informational side-channel (see the Notifications
+  section's own reasoning) but worth revisiting if per-user overrides on
+  these areas turn out to be common.
+- A rare idempotent-replay of `POST /transactions` (the same
+  `idempotencyKey` submitted twice) re-emits a `TRANSACTION_PAID` event
+  for the same already-committed payment, producing a harmless duplicate
+  "Payment received" notification — not a duplicate financial record (the
+  idempotency guard still prevents that), just a cosmetic repeat in the
+  member's notification feed.
+- Lead follow-up reminders only fire the day a follow-up becomes due, not
+  every day it remains overdue afterward — a lead whose follow-up date
+  passed before this phase shipped, or that's been sitting overdue for
+  weeks, won't retroactively generate daily reminders. `GET
+  /leads?followUpDueBy=` (from the Members/Leads phase) remains the
+  reliable way to find every currently-overdue lead regardless of when it
+  became due.
+- Membership-expiry reminders fire at exactly two milestones (7 and 1
+  days before `endDate`) with no per-tenant configuration — same
+  not-yet-configurable reasoning as the 14-day "expiring soon" threshold
+  above; a membership frozen and unfrozen in a way that shifts `endDate`
+  onto a milestone day still gets its reminder (the query runs fresh each
+  day), but there's no makeup reminder if a milestone is skipped entirely
+  (e.g. the scheduler being down that day).
+- `NotificationsSchedulerService`'s jobs all run at the same daily time
+  (`EVERY_DAY_AT_8AM`, server-local per `@nestjs/schedule`'s default) with
+  no per-tenant timezone awareness — a gym in a very different timezone
+  from the server gets its reminders at a fixed UTC-relative hour rather
+  than a locally-sensible one, even though `Tenant.timezone` already
+  exists in the schema for a future pass to read.

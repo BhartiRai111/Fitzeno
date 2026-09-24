@@ -6,12 +6,23 @@ import { Settings2 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { NotificationCenter } from "@/components/dashboard/notifications/notification-center";
-import { memberNotifications } from "@/lib/data/notifications";
+import { useOwnNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/use-notifications";
 import type { NotificationItem } from "@/lib/data/types";
 
 export function PortalNotificationsPageClient() {
-  const [notifications, setNotifications] = React.useState<NotificationItem[]>(memberNotifications);
+  const { data, isLoading } = useOwnNotifications();
+  const markRead = useMarkNotificationRead();
+  const markAllRead = useMarkAllNotificationsRead();
+
+  const notifications = data?.items ?? [];
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  function handleItemsChange(next: NotificationItem[]) {
+    for (const n of next) {
+      const prev = notifications.find((p) => p.id === n.id);
+      if (prev && !prev.read && n.read) markRead.mutate(n.id);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -21,11 +32,7 @@ export function PortalNotificationsPageClient() {
         actions={
           <>
             {unreadCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))}
-              >
+              <Button variant="outline" size="sm" onClick={() => markAllRead.mutate()}>
                 Mark all as read
               </Button>
             )}
@@ -41,7 +48,8 @@ export function PortalNotificationsPageClient() {
 
       <NotificationCenter
         items={notifications}
-        onItemsChange={setNotifications}
+        onItemsChange={handleItemsChange}
+        loading={isLoading}
         emptyTitle="You're all caught up"
         emptyDescription="Booking confirmations, membership reminders, and updates will show up here."
       />

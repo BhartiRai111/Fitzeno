@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MembershipsService } from './memberships.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -80,7 +81,8 @@ describe('MembershipsService', () => {
       recordWithinTransaction: vi.fn().mockResolvedValue({ id: 'txn-1' }),
     } as unknown as TransactionsService;
 
-    service = new MembershipsService(prisma, membersService, membershipPlansService, transactionsService);
+    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    service = new MembershipsService(prisma, membersService, membershipPlansService, transactionsService, eventEmitter);
   });
 
   describe('create', () => {

@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from '../users/users.service.js';
 import { ClassOccurrenceStatus, ClassSeriesStatus, DayOfWeek, UserRole } from '../generated/prisma/enums.js';
+import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 import type { CreateClassSeriesDto } from './dto/create-class-series.dto.js';
 import type { UpdateClassSeriesDto } from './dto/update-class-series.dto.js';
 import type { UpdateClassOccurrenceDto } from './dto/update-class-occurrence.dto.js';
@@ -107,6 +109,7 @@ export class ClassesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   private async assertTrainerUser(tenantId: string, trainerId: string): Promise<void> {
@@ -447,6 +450,12 @@ export class ClassesService {
       await this.assertNoOccurrenceDateConflict(tenantId, trainerId, existing.date, startTime, endTime, id);
     }
 
+    // A schedule-relevant change (time or trainer) is what earns a
+    // reschedule notification — a capacity/location-only edit doesn't
+    // change when/who a booked member or trainer needs to show up, so it
+    // fires nothing (see the task's own "avoid notification spam" guidance).
+    const isReschedule = dto.trainerId !== undefined || dto.startTime !== undefined || dto.endTime !== undefined;
+
     const occurrence = await this.prisma.classOccurrence.update({
       where: { id },
       data: {
@@ -458,11 +467,28 @@ export class ClassesService {
       },
       include: occurrenceInclude,
     });
+
+    if (isReschedule) {
+      const affectedMemberIds = occurrence.bookings.filter((b) => b.status === 'CONFIRMED' || b.status === 'WAITLISTED').map((b) => b.memberId);
+      const trainerIds = [...new Set([existing.trainerId, occurrence.trainerId])];
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.CLASS_OCCURRENCE_RESCHEDULED, {
+        tenantId,
+        classOccurrenceId: occurrence.id,
+        className: occurrence.classSeries.name,
+        date: occurrence.date,
+        startTime: occurrence.startTime,
+        trainerIds,
+        affectedMemberIds,
+      });
+    }
     return toClassOccurrenceResponse(occurrence);
   }
 
   async cancelOccurrence(tenantId: string, id: string, reason?: string): Promise<ClassOccurrenceResponseDto> {
-    const existing = await this.prisma.classOccurrence.findFirst({ where: { id, tenantId } });
+    const existing = await this.prisma.classOccurrence.findFirst({
+      where: { id, tenantId },
+      include: { classSeries: { select: { name: true } }, bookings: { where: { status: { in: ['CONFIRMED', 'WAITLISTED'] } }, select: { memberId: true } } },
+    });
     if (!existing) {
       throw new NotFoundException('Class session not found.');
     }
@@ -481,6 +507,17 @@ export class ClassesService {
         data: { status: 'CANCELLED', cancelledAt: new Date() },
       }),
     ]);
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.CLASS_OCCURRENCE_CANCELLED, {
+      tenantId,
+      classOccurrenceId: occurrence.id,
+      className: existing.classSeries.name,
+      date: occurrence.date,
+      startTime: occurrence.startTime,
+      trainerId: existing.trainerId,
+      affectedMemberIds: existing.bookings.map((b) => b.memberId),
+      reason,
+    });
     return toClassOccurrenceResponse(occurrence);
   }
 }

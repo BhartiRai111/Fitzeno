@@ -1,9 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MembersService } from '../members/members.service.js';
 import { MembershipPlansService } from '../membership-plans/membership-plans.service.js';
 import { TransactionsService } from '../payments/transactions.service.js';
+import type { TransactionResponseDto } from '../payments/dto/transaction-response.dto.js';
 import { runSerializableTransaction } from '../common/utils/serializable-transaction.util.js';
+import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 import { BillingPeriod, MembershipRecordStatus, PaymentMethod, TransactionStatus, TransactionType } from '../generated/prisma/enums.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PaginatedResult } from '../common/dto/pagination-query.dto.js';
@@ -66,6 +69,7 @@ export class MembershipsService {
     private readonly membersService: MembersService,
     private readonly membershipPlansService: MembershipPlansService,
     private readonly transactionsService: TransactionsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -196,7 +200,7 @@ export class MembershipsService {
   // ---------------------------------------------------------------------
 
   async create(tenantId: string, dto: CreateMembershipDto, recordedByUserId?: string): Promise<MembershipResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       await this.membersService.getMemberInTenant(tenantId, dto.memberId);
       const plan = await this.membershipPlansService.getActivePlanOrThrow(tenantId, dto.planId);
 
@@ -227,21 +231,52 @@ export class MembershipsService {
       // Payments module's own README notes on this integration boundary:
       // Memberships stays responsible for membership state, Payments for
       // financial state — this is the one call that connects them.
-      if (dto.paymentMethod) {
-        await this.transactionsService.recordWithinTransaction(tx, tenantId, {
-          memberId: dto.memberId,
-          type: TransactionType.MEMBERSHIP_PURCHASE,
-          description: `${plan.name} plan — purchase`,
-          amount: Number(plan.price),
-          method: dto.paymentMethod,
-          status: this.initialTransactionStatus(dto.paymentMethod),
-          relatedMembershipId: membership.id,
-          recordedByUserId,
-        });
-      }
+      const transaction = dto.paymentMethod
+        ? await this.transactionsService.recordWithinTransaction(tx, tenantId, {
+            memberId: dto.memberId,
+            type: TransactionType.MEMBERSHIP_PURCHASE,
+            description: `${plan.name} plan — purchase`,
+            amount: Number(plan.price),
+            method: dto.paymentMethod,
+            status: this.initialTransactionStatus(dto.paymentMethod),
+            relatedMembershipId: membership.id,
+            recordedByUserId,
+          })
+        : null;
 
-      return toMembershipResponse(membership, todayUtc());
+      return { membership: toMembershipResponse(membership, todayUtc()), transaction };
     });
+
+    // Emitted only now, after the transaction has actually committed — see
+    // domain-events.ts's own comment on why events never fire from inside
+    // a runSerializableTransaction callback.
+    this.emitMembershipLifecycleEvents(tenantId, dto.memberId, NOTIFICATION_EVENTS.MEMBERSHIP_CREATED, result);
+    return result.membership;
+  }
+
+  /** Shared by create() and renewInternal() — both open their own top-level transaction and optionally record a payment inside it, so both need the same "emit lifecycle event, and a payment-paid event if one was recorded" step once that transaction has committed. */
+  private emitMembershipLifecycleEvents(
+    tenantId: string,
+    memberId: string,
+    lifecycleEvent: typeof NOTIFICATION_EVENTS.MEMBERSHIP_CREATED | typeof NOTIFICATION_EVENTS.MEMBERSHIP_RENEWED,
+    result: { membership: MembershipResponseDto; transaction: TransactionResponseDto | null },
+  ): void {
+    this.eventEmitter.emit(lifecycleEvent, {
+      tenantId,
+      memberId,
+      membershipId: result.membership.id,
+      planName: result.membership.planName,
+    });
+    if (result.transaction?.status === 'PAID') {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.TRANSACTION_PAID, {
+        tenantId,
+        memberId,
+        transactionId: result.transaction.id,
+        amount: result.transaction.amount,
+        currency: result.transaction.currency,
+        description: result.transaction.description,
+      });
+    }
   }
 
   /**
@@ -283,7 +318,7 @@ export class MembershipsService {
     dto: RenewMembershipDto,
     recordedByUserId?: string,
   ): Promise<MembershipResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const current = await tx.memberMembership.findFirst({ where: { id: currentId, tenantId } });
       if (!current) {
         throw new NotFoundException('Membership not found.');
@@ -326,21 +361,24 @@ export class MembershipsService {
 
       // See create()'s own comment: no payment method means a deliberate
       // comp/administrative renewal, not a missed financial record.
-      if (dto.paymentMethod) {
-        await this.transactionsService.recordWithinTransaction(tx, tenantId, {
-          memberId: current.memberId,
-          type: TransactionType.MEMBERSHIP_RENEWAL,
-          description: `${plan.name} plan — renewal`,
-          amount: Number(plan.price),
-          method: dto.paymentMethod,
-          status: this.initialTransactionStatus(dto.paymentMethod),
-          relatedMembershipId: membership.id,
-          recordedByUserId,
-        });
-      }
+      const transaction = dto.paymentMethod
+        ? await this.transactionsService.recordWithinTransaction(tx, tenantId, {
+            memberId: current.memberId,
+            type: TransactionType.MEMBERSHIP_RENEWAL,
+            description: `${plan.name} plan — renewal`,
+            amount: Number(plan.price),
+            method: dto.paymentMethod,
+            status: this.initialTransactionStatus(dto.paymentMethod),
+            relatedMembershipId: membership.id,
+            recordedByUserId,
+          })
+        : null;
 
-      return toMembershipResponse(membership, today);
+      return { membership: toMembershipResponse(membership, today), transaction, memberId: current.memberId };
     });
+
+    this.emitMembershipLifecycleEvents(tenantId, result.memberId, NOTIFICATION_EVENTS.MEMBERSHIP_RENEWED, result);
+    return result.membership;
   }
 
   async freeze(tenantId: string, id: string): Promise<MembershipResponseDto> {
@@ -387,6 +425,13 @@ export class MembershipsService {
       where: { id },
       data: { status: MembershipRecordStatus.CANCELLED, cancelledAt: new Date(), cancellationReason: reason },
       include: membershipInclude,
+    });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.MEMBERSHIP_CANCELLED, {
+      tenantId,
+      memberId: membership.memberId,
+      membershipId: membership.id,
+      planName: membership.planName,
     });
     return toMembershipResponse(membership, todayUtc());
   }

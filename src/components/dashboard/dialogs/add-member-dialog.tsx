@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
 import {
   Dialog,
@@ -22,8 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { membershipPlans } from "@/lib/data/plans";
-import { trainers } from "@/lib/data/trainers";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 
 export interface NewMemberInput {
   name: string;
@@ -47,7 +46,7 @@ interface AddMemberDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   defaultValues?: AddMemberDefaults;
-  onAdd?: (input: NewMemberInput) => void;
+  onAdd?: (input: NewMemberInput) => void | Promise<void>;
 }
 
 export function AddMemberDialog({ trigger, open: controlledOpen, onOpenChange, defaultValues, onAdd }: AddMemberDialogProps) {
@@ -59,33 +58,35 @@ export function AddMemberDialog({ trigger, open: controlledOpen, onOpenChange, d
     onOpenChange?.(next);
   };
 
+  const { plans: membershipPlans } = useMembershipPlans();
+  const { trainers } = useTrainersRoster();
   const [submitting, setSubmitting] = React.useState(false);
   const [trainerId, setTrainerId] = React.useState<string>("none");
-  const [planId, setPlanId] = React.useState(defaultValues?.planId || membershipPlans[1]?.id);
+  const [planIdOverride, setPlanIdOverride] = React.useState<string | null>(null);
+  const planId = planIdOverride ?? defaultValues?.planId ?? membershipPlans[0]?.id ?? "";
 
   function resetSelects() {
-    setPlanId(defaultValues?.planId || membershipPlans[1]?.id);
+    setPlanIdOverride(null);
     setTrainerId("none");
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") ?? "");
-    const phone = String(form.get("phone") ?? "");
-    const email = String(form.get("email") ?? "");
-    const dob = String(form.get("dob") ?? "");
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const name = String(data.get("name") ?? "");
+    const phone = String(data.get("phone") ?? "");
+    const email = String(data.get("email") ?? "");
+    const dob = String(data.get("dob") ?? "");
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await onAdd?.({ name, phone, email, dob, planId, trainerId: trainerId === "none" ? undefined : trainerId });
       setOpen(false);
-      onAdd?.({ name, phone, email, dob, planId: planId ?? membershipPlans[0].id, trainerId: trainerId === "none" ? undefined : trainerId });
-      toast.success("Member added", {
-        description: `${name || "New member"} has been added to Fitzeno.`,
-      });
-      (event.target as HTMLFormElement).reset();
+      form.reset();
       resetSelects();
-    }, 700);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -129,7 +130,7 @@ export function AddMemberDialog({ trigger, open: controlledOpen, onOpenChange, d
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Membership plan</Label>
-              <Select value={planId} onValueChange={setPlanId}>
+              <Select value={planId} onValueChange={setPlanIdOverride}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -163,7 +164,7 @@ export function AddMemberDialog({ trigger, open: controlledOpen, onOpenChange, d
             <Button type="button" variant="outline" onClick={() => { setOpen(false); resetSelects(); }}>
               Cancel
             </Button>
-            <Button type="submit" loading={submitting}>
+            <Button type="submit" loading={submitting} disabled={!planId}>
               Add Member
             </Button>
           </DialogFooter>

@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MembersService } from '../members/members.service.js';
 import { InvoicesService } from './invoices.service.js';
@@ -14,6 +15,7 @@ import {
 import { toRefundResponse, type RefundResponseDto } from './dto/refund-response.dto.js';
 import type { CreateTransactionDto } from './dto/create-transaction.dto.js';
 import type { ListTransactionsQueryDto } from './dto/list-transactions-query.dto.js';
+import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 
 /**
  * Reusable financial-transaction domain: this is the ONE place any
@@ -58,6 +60,7 @@ export class TransactionsService {
     private readonly prisma: PrismaService,
     private readonly membersService: MembersService,
     private readonly invoicesService: InvoicesService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   /**
@@ -69,9 +72,30 @@ export class TransactionsService {
    * Serializable transaction — use `recordWithinTransaction` instead when
    * a caller (e.g. MembershipsService) needs this recorded atomically
    * alongside its own writes, inside a transaction it already holds.
+   *
+   * Emits TRANSACTION_PAID after the transaction commits (never from
+   * inside recordWithinTransaction itself — see domain-events.ts's own
+   * comment on why events only fire post-commit, and TransactionsService's
+   * own recordWithinTransaction doc comment on why nested callers like
+   * MembershipsService must never call `record` and emit their own event
+   * instead). A rare idempotent replay re-emits this event for the same
+   * already-committed payment — a harmless, low-stakes duplicate
+   * notification, not a duplicate financial record (see the README's
+   * known limitations).
    */
   async record(tenantId: string, input: RecordTransactionInput): Promise<TransactionResponseDto> {
-    return runSerializableTransaction(this.prisma, (tx) => this.recordWithinTransaction(tx, tenantId, input));
+    const result = await runSerializableTransaction(this.prisma, (tx) => this.recordWithinTransaction(tx, tenantId, input));
+    if (result.status === TransactionStatus.PAID) {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.TRANSACTION_PAID, {
+        tenantId,
+        memberId: result.member.id,
+        transactionId: result.id,
+        amount: result.amount,
+        currency: result.currency,
+        description: result.description,
+      });
+    }
+    return result;
   }
 
   /**
@@ -213,12 +237,32 @@ export class TransactionsService {
 
   async markPaid(tenantId: string, id: string): Promise<TransactionResponseDto> {
     await this.transitionFromPending(tenantId, id, { status: TransactionStatus.PAID, paidAt: new Date() });
-    return this.findByIdInTenant(tenantId, id);
+    const result = await this.findByIdInTenant(tenantId, id);
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.TRANSACTION_PAID, {
+      tenantId,
+      memberId: result.member.id,
+      transactionId: result.id,
+      amount: result.amount,
+      currency: result.currency,
+      description: result.description,
+    });
+    return result;
   }
 
+  /** Notifies both the member and authorized staff — see NotificationsEventListener.onTransactionFailed. */
   async markFailed(tenantId: string, id: string, reason?: string): Promise<TransactionResponseDto> {
     await this.transitionFromPending(tenantId, id, { status: TransactionStatus.FAILED, failureReason: reason });
-    return this.findByIdInTenant(tenantId, id);
+    const result = await this.findByIdInTenant(tenantId, id);
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.TRANSACTION_FAILED, {
+      tenantId,
+      memberId: result.member.id,
+      transactionId: result.id,
+      amount: result.amount,
+      currency: result.currency,
+      description: result.description,
+      reason,
+    });
+    return result;
   }
 
   async cancel(tenantId: string, id: string): Promise<TransactionResponseDto> {
@@ -263,7 +307,7 @@ export class TransactionsService {
     transactionId: string,
     input: { amount?: number; reason?: string; processedByUserId?: string },
   ): Promise<RefundResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const transaction = await tx.transaction.findFirst({ where: { id: transactionId, tenantId } });
       if (!transaction) {
         throw new NotFoundException('Transaction not found.');
@@ -310,8 +354,19 @@ export class TransactionsService {
         where: { id: refund.id },
         include: { transaction: { select: { id: true, amount: true, invoice: { select: { invoiceNumber: true } } } }, processedByUser: { select: { id: true, firstName: true, lastName: true } } },
       });
-      return toRefundResponse(withRelations);
+      return { refund: toRefundResponse(withRelations), memberId: transaction.memberId, currency: transaction.currency, isFullRefund: newStatus === TransactionStatus.REFUNDED };
     });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.TRANSACTION_REFUNDED, {
+      tenantId,
+      memberId: result.memberId,
+      transactionId,
+      refundId: result.refund.id,
+      amount: result.refund.amount,
+      currency: result.currency,
+      isFullRefund: result.isFullRefund,
+    });
+    return result.refund;
   }
 
   /**

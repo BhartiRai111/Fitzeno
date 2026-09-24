@@ -18,26 +18,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { MembershipStatusBadge, PaymentStatusBadge } from "@/components/shared/status-badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { MembershipStatusBadge } from "@/components/shared/status-badge";
 import { MemberActionsMenu } from "@/components/dashboard/member-actions-menu";
 import { AddMemberDialog, type NewMemberInput } from "@/components/dashboard/dialogs/add-member-dialog";
-import { members as initialMembers } from "@/lib/data/members";
-import { trainers } from "@/lib/data/trainers";
-import { membershipPlans } from "@/lib/data/plans";
-import { addMonths } from "@/lib/membership-helpers";
+import { useMembersRoster, useCreateMember, useCreateMembership } from "@/hooks/use-members";
+import { useTrainersRoster } from "@/hooks/use-trainers";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
 import { formatDate, daysBetween } from "@/lib/utils-data";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import type { Member } from "@/lib/data/types";
 
-const TODAY = "2026-09-21";
+const TODAY = new Date().toISOString().slice(0, 10);
 
 type TabValue = "all" | "active" | "expiring" | "expired" | "inactive";
 
 function isInactive(member: Member) {
-  return daysBetween(member.lastCheckIn, TODAY) >= 21;
-}
-
-function initialsFor(name: string): string {
-  return name.split(" ").map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "?";
+  return !!member.lastCheckIn && daysBetween(member.lastCheckIn, TODAY) >= 21;
 }
 
 export function MembersPageClient() {
@@ -49,7 +46,11 @@ export function MembersPageClient() {
   const prefillPhone = searchParams.get("prefillPhone") ?? "";
   const prefillPlan = searchParams.get("prefillPlan") ?? "";
 
-  const [members, setMembers] = React.useState<Member[]>(initialMembers);
+  const { members, membershipByMemberId, isLoading } = useMembersRoster();
+  const { trainers } = useTrainersRoster();
+  const { plans: membershipPlans } = useMembershipPlans();
+  const createMember = useCreateMember();
+  const createMembership = useCreateMembership();
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [planFilter, setPlanFilter] = React.useState(initialPlan);
@@ -57,33 +58,25 @@ export function MembersPageClient() {
   const [joinedFilter, setJoinedFilter] = React.useState("all");
   const [addMemberOpen, setAddMemberOpen] = React.useState(!!prefillName);
 
-  function handleAddMember(input: NewMemberInput) {
+  async function handleAddMember(input: NewMemberInput) {
     const plan = membershipPlans.find((p) => p.id === input.planId) ?? membershipPlans[0];
-    const newMember: Member = {
-      id: `m-${Date.now()}`,
-      name: input.name,
-      initials: initialsFor(input.name),
-      email: input.email,
-      phone: input.phone,
-      plan: plan.name,
-      status: "active",
-      joinedOn: TODAY,
-      expiresOn: addMonths(TODAY, plan.billingPeriod === "year" ? 12 : 1),
-      lastCheckIn: TODAY,
-      lifetimeValue: plan.price,
-      trainerId: input.trainerId,
-      paymentStatus: "paid",
-      attendanceThisMonth: 0,
-      gender: "Other",
-      dob: input.dob,
-      address: "",
-      emergencyContact: "",
-      notes: prefillName
-        ? [{ id: `note-${Date.now()}`, author: "Sam Carter", date: TODAY, text: "Converted from an enquiry — see the Leads pipeline for their contact history." }]
-        : [],
-    };
-    setMembers((prev) => [newMember, ...prev]);
-    toast.success(`${newMember.name} is now a member`, { description: `${plan.name} plan · joined ${formatDate(TODAY)}.` });
+    const [firstName, ...rest] = input.name.trim().split(/\s+/);
+    const lastName = rest.join(" ") || firstName;
+    try {
+      const member = await createMember.mutateAsync({
+        firstName,
+        lastName,
+        email: input.email || undefined,
+        phone: input.phone || undefined,
+        dateOfBirth: input.dob || undefined,
+        trainerId: input.trainerId,
+      });
+      await createMembership.mutateAsync({ memberId: member.id, planId: input.planId });
+      toast.success(`${input.name} is now a member`, { description: `${plan.name} plan · joined ${formatDate(TODAY)}.` });
+    } catch (err) {
+      const message = err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't add this member. Please try again.";
+      toast.error(message);
+    }
   }
 
   const tabFiltered = members.filter((m) => {
@@ -166,9 +159,9 @@ export function MembersPageClient() {
               <SelectTrigger className="sm:w-40"><SelectValue placeholder="Plan" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All plans</SelectItem>
-                <SelectItem value="Basic">Basic</SelectItem>
-                <SelectItem value="Growth">Growth</SelectItem>
-                <SelectItem value="Elite">Elite</SelectItem>
+                {membershipPlans.map((plan) => (
+                  <SelectItem key={plan.id} value={plan.name}>{plan.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select value={trainerFilter} onValueChange={setTrainerFilter}>
@@ -192,11 +185,17 @@ export function MembersPageClient() {
             </Select>
           </Card>
 
-          {filtered.length === 0 ? (
+          {isLoading ? (
+            <Card className="space-y-3 p-4">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </Card>
+          ) : filtered.length === 0 ? (
             <EmptyState
               icon={Users}
-              title="No members match these filters"
-              description="Try adjusting your search or filters."
+              title={members.length === 0 ? "No members yet" : "No members match these filters"}
+              description={members.length === 0 ? "Add your first member to get started." : "Try adjusting your search or filters."}
               action={{ label: "Reset filters", onClick: () => { setSearch(""); setPlanFilter("all"); setTrainerFilter("all"); setJoinedFilter("all"); } }}
             />
           ) : (
@@ -211,7 +210,6 @@ export function MembersPageClient() {
                       <th className="px-4 py-3 font-medium">Attendance</th>
                       <th className="px-4 py-3 font-medium">Expiry</th>
                       <th className="px-4 py-3 font-medium">Trainer</th>
-                      <th className="px-4 py-3 font-medium">Payment</th>
                       <th className="px-4 py-3 font-medium">Last visit</th>
                       <th className="px-4 py-3 font-medium" />
                     </tr>
@@ -235,11 +233,12 @@ export function MembersPageClient() {
                           <td className="px-4 py-3 text-muted-foreground">{member.plan}</td>
                           <td className="px-4 py-3"><MembershipStatusBadge status={member.status} /></td>
                           <td className="px-4 py-3 tabular text-muted-foreground">{member.attendanceThisMonth}/mo</td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatDate(member.expiresOn)}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{member.expiresOn ? formatDate(member.expiresOn) : "—"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{trainer?.name ?? "—"}</td>
-                          <td className="px-4 py-3"><PaymentStatusBadge status={member.paymentStatus} /></td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatDate(member.lastCheckIn)}</td>
-                          <td className="px-4 py-3 text-right"><MemberActionsMenu member={member} /></td>
+                          <td className="px-4 py-3 text-muted-foreground">{member.lastCheckIn ? formatDate(member.lastCheckIn) : "—"}</td>
+                          <td className="px-4 py-3 text-right">
+                            <MemberActionsMenu member={member} membershipId={membershipByMemberId.get(member.id)?.id ?? null} />
+                          </td>
                         </tr>
                       );
                     })}

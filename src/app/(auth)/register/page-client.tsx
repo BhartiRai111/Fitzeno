@@ -21,6 +21,8 @@ import { Logo } from "@/components/brand/logo";
 import { LegalDialog } from "@/components/shared/legal-dialog";
 import { cn } from "@/lib/utils";
 import { membershipPlans } from "@/lib/data/plans";
+import { useAuth } from "@/lib/auth/auth-context";
+import { ApiError, NetworkError } from "@/lib/api/types";
 
 function passwordStrength(password: string) {
   let score = 0;
@@ -36,6 +38,7 @@ const strengthColors = ["bg-muted", "bg-danger", "bg-warning", "bg-info", "bg-su
 
 export function RegisterPageClient() {
   const router = useRouter();
+  const { registerMember } = useAuth();
   const searchParams = useSearchParams();
   const planId = searchParams.get("plan");
   const offerCode = searchParams.get("offer");
@@ -49,16 +52,28 @@ export function RegisterPageClient() {
 
   const strength = passwordStrength(password);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!agreed) {
       setError("You need to accept the Terms of Service to continue.");
       return;
     }
     setError(null);
+    const form = new FormData(event.currentTarget);
+    const fullName = String(form.get("name") ?? "").trim();
+    const email = String(form.get("email") ?? "").trim();
+    const phone = String(form.get("phone") ?? "").trim();
+    const [firstName, ...rest] = fullName.split(/\s+/);
+    const lastName = rest.join(" ") || firstName;
+
+    if (!firstName || !email || !password) {
+      setError("Fill in your name, email, and password to continue.");
+      return;
+    }
+
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await registerMember({ firstName, lastName, email, password, phone: phone || undefined });
       if (preselectedPlan) {
         const params = new URLSearchParams({ plan: preselectedPlan.id });
         if (offerCode) params.set("offer", offerCode);
@@ -66,7 +81,14 @@ export function RegisterPageClient() {
       } else {
         router.push("/portal");
       }
-    }, 900);
+    } catch (err) {
+      if (err instanceof ApiError || err instanceof NetworkError) {
+        setError(err.message);
+      } else {
+        setError("Something went wrong. Please try again.");
+      }
+      setSubmitting(false);
+    }
   }
 
   return (

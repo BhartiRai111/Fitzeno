@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { toast } from "sonner";
 import { UserRoundPlus } from "lucide-react";
 import {
   Dialog,
@@ -40,7 +39,7 @@ export interface NewLeadInput {
 interface AddLeadDialogProps {
   trigger?: React.ReactNode;
   assigneeOptions?: string[];
-  onAdd?: (input: NewLeadInput) => void;
+  onAdd?: (input: NewLeadInput) => void | Promise<void>;
 }
 
 export function AddLeadDialog({ trigger, assigneeOptions = DEFAULT_ASSIGNEES, onAdd }: AddLeadDialogProps) {
@@ -49,26 +48,25 @@ export function AddLeadDialog({ trigger, assigneeOptions = DEFAULT_ASSIGNEES, on
   const [source, setSource] = React.useState<LeadSource>("Website");
   const [assignedTo, setAssignedTo] = React.useState(assigneeOptions[0] ?? "Front Desk");
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") ?? "").trim();
-    const phone = String(form.get("phone") ?? "").trim();
-    const email = String(form.get("email") ?? "").trim();
-    const interest = String(form.get("interest") ?? "").trim();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const name = String(data.get("name") ?? "").trim();
+    const phone = String(data.get("phone") ?? "").trim();
+    const email = String(data.get("email") ?? "").trim();
+    const interest = String(data.get("interest") ?? "").trim();
 
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await onAdd?.({ name, phone, email, source, interest: interest || "General enquiry", assignedTo });
       setOpen(false);
-      onAdd?.({ name, phone, email, source, interest: interest || "General enquiry", assignedTo });
-      toast.success("Lead added", {
-        description: `${name || "New lead"} has been added to your pipeline.`,
-      });
-      (event.target as HTMLFormElement).reset();
+      form.reset();
       setSource("Website");
       setAssignedTo(assigneeOptions[0] ?? "Front Desk");
-    }, 700);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (

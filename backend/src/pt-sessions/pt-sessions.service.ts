@@ -1,8 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MembersService } from '../members/members.service.js';
 import { TrainersService } from '../trainers/trainers.service.js';
 import { runSerializableTransaction } from '../common/utils/serializable-transaction.util.js';
+import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 import { ClassBookingStatus, ClassOccurrenceStatus, MemberStatus, PtSessionStatus, UserRole } from '../generated/prisma/enums.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { DayOfWeek, TrainerAvailability } from '../generated/prisma/client.js';
@@ -85,6 +87,7 @@ export class PtSessionsService {
     private readonly prisma: PrismaService,
     private readonly membersService: MembersService,
     private readonly trainersService: TrainersService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async getAvailableSlots(tenantId: string, trainerId: string, dateStr: string): Promise<FreeSlotDto[]> {
@@ -111,7 +114,7 @@ export class PtSessionsService {
   }
 
   async book(tenantId: string, trainerId: string, memberId: string, dto: CreatePtSessionDto): Promise<PtSessionResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const trainer = await this.trainersService.getActiveBookableTrainer(tenantId, trainerId);
       const date = parseDateOnly(dto.date);
       const endTime = addMinutesToTime(dto.startTime, dto.durationMinutes);
@@ -153,10 +156,20 @@ export class PtSessionsService {
       });
       return toPtSessionResponse(session);
     });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.PT_SESSION_BOOKED, {
+      tenantId,
+      sessionId: result.id,
+      memberId: result.member.id,
+      trainerId: result.trainer.id,
+      date: result.date,
+      startTime: result.startTime,
+    });
+    return result;
   }
 
   async reschedule(tenantId: string, id: string, dto: ReschedulePtSessionDto, caller?: { memberId: string }): Promise<PtSessionResponseDto> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const existing = await tx.personalTrainingSession.findFirst({ where: { id, tenantId } });
       if (!existing) {
         throw new NotFoundException('Personal training session not found.');
@@ -196,8 +209,19 @@ export class PtSessionsService {
       });
       return toPtSessionResponse(session);
     });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.PT_SESSION_RESCHEDULED, {
+      tenantId,
+      sessionId: result.id,
+      memberId: result.member.id,
+      trainerId: result.trainer.id,
+      date: result.date,
+      startTime: result.startTime,
+    });
+    return result;
   }
 
+  /** Notifies whichever party did NOT initiate the cancellation — see NotificationsEventListener.onPtSessionCancelled. */
   async cancel(tenantId: string, id: string, caller?: { memberId: string }): Promise<PtSessionResponseDto> {
     const existing = await this.prisma.personalTrainingSession.findFirst({ where: { id, tenantId } });
     if (!existing) {
@@ -222,6 +246,16 @@ export class PtSessionsService {
       where: { id },
       data: { status: PtSessionStatus.CANCELLED },
       include: sessionInclude,
+    });
+
+    this.eventEmitter.emit(NOTIFICATION_EVENTS.PT_SESSION_CANCELLED, {
+      tenantId,
+      sessionId: session.id,
+      memberId: session.member.id,
+      trainerId: session.trainer.id,
+      date: session.date,
+      startTime: session.startTime,
+      cancelledBy: caller ? 'member' : 'staff',
     });
     return toPtSessionResponse(session);
   }

@@ -1,7 +1,7 @@
-export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial" | "cancelled";
+export type MembershipStatus = "active" | "expiring" | "expired" | "frozen" | "trial" | "cancelled" | "pending" | "none";
 export type LeadStatus = "new" | "contacted" | "follow-up" | "trial-booked" | "trial-attended" | "converted" | "lost";
 export type LeadLostReason = "No response" | "Not interested" | "Price" | "Chose another gym" | "Bad timing" | "Other";
-export type PaymentStatus = "paid" | "pending" | "failed" | "refunded";
+export type PaymentStatus = "paid" | "pending" | "failed" | "refunded" | "cancelled";
 export type BookingStatus = "booked" | "waitlisted" | "attended" | "cancelled" | "no-show";
 export type LeadSource = "Website" | "Instagram" | "Referral" | "Walk-in" | "Advertisement";
 
@@ -133,6 +133,8 @@ export interface Lead {
   trialClassId?: string;
   /** Computed next-occurrence date for the trial class, e.g. "2026-09-26". */
   trialDate?: string;
+  /** Free-text trial detail (e.g. which class) — the backend has no trialClassId FK, just this note. */
+  trialNotes?: string;
   convertedPlanId?: string;
   convertedOn?: string;
 }
@@ -144,7 +146,7 @@ export interface Payment {
   memberName: string;
   memberInitials: string;
   amount: number;
-  method: "Card" | "UPI" | "Cash" | "Bank Transfer";
+  method: "Card" | "UPI" | "Cash" | "Bank Transfer" | "Online" | "Other";
   status: PaymentStatus;
   plan: string;
   category: RevenueCategory;

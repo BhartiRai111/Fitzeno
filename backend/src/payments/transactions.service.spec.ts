@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TransactionsService } from './transactions.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -77,7 +78,8 @@ describe('TransactionsService', () => {
       createForTransaction: vi.fn().mockResolvedValue({ id: 'inv-1', invoiceNumber: 'INV-000001' }),
     } as unknown as InvoicesService;
 
-    service = new TransactionsService(prisma, membersService, invoicesService);
+    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    service = new TransactionsService(prisma, membersService, invoicesService, eventEmitter);
   });
 
   describe('record / recordWithinTransaction', () => {

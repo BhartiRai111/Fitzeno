@@ -8,6 +8,8 @@ import { DEMO_MEMBER_ID, TODAY } from "@/lib/booking-helpers";
 import { getMembershipBlock, type MembershipBlock } from "@/lib/attendance-helpers";
 import { getPlanById, computeNextExpiry } from "@/lib/membership-helpers";
 import { daysBetween, formatDate } from "@/lib/utils-data";
+import { useAuth } from "@/lib/auth/auth-context";
+import { toInitials } from "@/lib/api/enum-maps";
 import type { Member, Payment } from "@/lib/data/types";
 
 export type PaymentMethodChoice = "Card" | "UPI" | "Bank Transfer";
@@ -36,8 +38,18 @@ interface MembershipContextValue {
 const MembershipContext = React.createContext<MembershipContextValue | null>(null);
 
 export function MembershipProvider({ children }: { children: React.ReactNode }) {
+  // Real identity from the authenticated session (RequireAuth guarantees `user`
+  // is resolved before this provider ever mounts — see portal/layout.tsx). The
+  // plan/status/expiry/payment simulation below is still local-only — the
+  // Memberships/Bookings backend integration for the member portal is a
+  // follow-up phase (see session report).
+  const { user } = useAuth();
   const baseMember = initialMembers.find((m) => m.id === DEMO_MEMBER_ID)!;
-  const [member, setMember] = React.useState<Member>(baseMember);
+  const [member, setMember] = React.useState<Member>(() =>
+    user
+      ? { ...baseMember, name: `${user.firstName} ${user.lastName}`, initials: toInitials(user.firstName, user.lastName), email: user.email, phone: user.phone ?? baseMember.phone }
+      : baseMember,
+  );
   const [paymentHistory, setPaymentHistory] = React.useState<Payment[]>(() =>
     initialPayments.filter((p) => p.memberName === baseMember.name)
   );
