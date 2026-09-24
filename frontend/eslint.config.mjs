@@ -12,9 +12,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // The NestJS API is its own project with its own lint config — see
-    // backend/README.md. It shouldn't be linted under Next's ruleset.
-    "backend/**",
   ]),
 ]);
 

@@ -2,7 +2,7 @@
 
 The backend for the Fitzeno gym management platform — a NestJS 12 service on
 PostgreSQL via Prisma, built to sit behind the existing Next.js frontend in
-`../src`.
+`../frontend/src`.
 
 **Status:** identity, access-control, gym/business management, and the
 first real business domain — **Members & Leads/CRM** — complete. On top of
@@ -347,7 +347,7 @@ token's TTL.
 
 ### Roles & permissions
 
-Mirrors the frontend's already-designed model (`../src/lib/permissions.ts`)
+Mirrors the frontend's already-designed model (`../frontend/src/lib/permissions.ts`)
 1:1 rather than inventing a new one: a **role-based default** merged with
 **per-user overrides** — both role-based *and* configurable, at once.
 
