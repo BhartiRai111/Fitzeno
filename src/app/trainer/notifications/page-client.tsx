@@ -8,26 +8,48 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { NotificationCenter } from "@/components/dashboard/notifications/notification-center";
-import { trainerNotifications } from "@/lib/data/notifications";
-import type { NotificationItem } from "@/lib/data/types";
+import {
+  useOwnNotifications,
+  useMarkNotificationRead,
+  useMarkAllNotificationsRead,
+  useNotificationPreferences,
+  useUpdateNotificationPreferences,
+} from "@/hooks/use-notifications";
+import { ApiError, NetworkError } from "@/lib/api/types";
+import type { NotificationCategory, NotificationItem } from "@/lib/data/types";
 
 export function TrainerNotificationsPageClient() {
-  const [notifications, setNotifications] = React.useState<NotificationItem[]>(trainerNotifications);
-  const [prefs, setPrefs] = React.useState({
-    bookings: true,
-    classAlerts: true,
-    attendanceReminders: true,
-    announcements: true,
-  });
+  const { data, isLoading } = useOwnNotifications();
+  const markRead = useMarkNotificationRead();
+  const markAllRead = useMarkAllNotificationsRead();
+  const { preferences, isLoading: prefsLoading } = useNotificationPreferences();
+  const updatePrefs = useUpdateNotificationPreferences();
+  const [draft, setDraft] = React.useState<Partial<Record<NotificationCategory, boolean>>>({});
   const [savingPrefs, setSavingPrefs] = React.useState(false);
+
+  const notifications = data?.items ?? [];
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  function handleSavePrefs() {
+  function handleItemsChange(next: NotificationItem[]) {
+    for (const n of next) {
+      const prev = notifications.find((p) => p.id === n.id);
+      if (prev && !prev.read && n.read) markRead.mutate(n.id);
+    }
+  }
+
+  async function handleSavePrefs() {
+    const changed = Object.entries(draft);
+    if (changed.length === 0) return;
     setSavingPrefs(true);
-    setTimeout(() => {
-      setSavingPrefs(false);
+    try {
+      await updatePrefs.mutateAsync(changed.map(([category, enabled]) => ({ category: category as NotificationCategory, enabled: enabled! })));
+      setDraft({});
       toast.success("Preferences saved");
-    }, 600);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't save preferences.");
+    } finally {
+      setSavingPrefs(false);
+    }
   }
 
   return (
@@ -37,11 +59,7 @@ export function TrainerNotificationsPageClient() {
         description="Your own classes, PT sessions, and assigned members — other trainers' rosters stay private."
         actions={
           unreadCount > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))}
-            >
+            <Button variant="outline" size="sm" onClick={() => markAllRead.mutate()}>
               Mark all as read
             </Button>
           ) : undefined
@@ -50,46 +68,43 @@ export function TrainerNotificationsPageClient() {
 
       <NotificationCenter
         items={notifications}
-        onItemsChange={setNotifications}
+        onItemsChange={handleItemsChange}
+        loading={isLoading}
         emptyTitle="You're all caught up"
         emptyDescription="New bookings, class alerts, and attendance reminders will show up here."
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Notification preferences</CardTitle>
-          <CardDescription>Choose what you want to be notified about.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-1">
-          {(
-            [
-              { key: "bookings" as const, label: "PT bookings & cancellations", description: "New sessions, cancellations, and confirmations from your clients." },
-              { key: "classAlerts" as const, label: "Class capacity & schedule alerts", description: "Your classes nearing capacity, or changes to your schedule." },
-              { key: "attendanceReminders" as const, label: "Attendance marking reminders", description: "Nudges when a class you taught still needs attendance marked." },
-              { key: "announcements" as const, label: "Gym announcements", description: "Closures, policy updates, and general communication from the gym." },
-            ]
-          ).map((item, i) => (
-            <React.Fragment key={item.key}>
-              {i > 0 && <Separator />}
-              <div className="flex items-center justify-between py-3">
-                <div>
-                  <p className="text-sm font-medium text-foreground">{item.label}</p>
-                  <p className="text-sm text-muted-foreground">{item.description}</p>
-                </div>
-                <Switch
-                  checked={prefs[item.key]}
-                  onCheckedChange={(checked) => setPrefs((prev) => ({ ...prev, [item.key]: checked }))}
-                />
-              </div>
-            </React.Fragment>
-          ))}
-        </CardContent>
-        <CardFooter>
-          <Button size="sm" loading={savingPrefs} onClick={handleSavePrefs}>
-            Save Changes
-          </Button>
-        </CardFooter>
-      </Card>
+      {!prefsLoading && preferences.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Notification preferences</CardTitle>
+            <CardDescription>Choose what you want to be notified about.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {preferences.map((pref, i) => {
+              const checked = draft[pref.category] ?? pref.enabled;
+              return (
+                <React.Fragment key={pref.category}>
+                  {i > 0 && <Separator />}
+                  <div className="flex items-center justify-between py-3">
+                    <p className="text-sm font-medium text-foreground">{pref.label}</p>
+                    <Switch
+                      checked={checked}
+                      disabled={!pref.toggleable}
+                      onCheckedChange={(v) => setDraft((prev) => ({ ...prev, [pref.category]: v }))}
+                    />
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </CardContent>
+          <CardFooter>
+            <Button size="sm" loading={savingPrefs} disabled={Object.keys(draft).length === 0} onClick={handleSavePrefs}>
+              Save Changes
+            </Button>
+          </CardFooter>
+        </Card>
+      )}
     </div>
   );
 }

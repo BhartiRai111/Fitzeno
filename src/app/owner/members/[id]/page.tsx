@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MembershipStatusBadge,
@@ -35,26 +36,42 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { EditMemberDialog } from "@/components/dashboard/dialogs/edit-member-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
-import { members as initialMembers } from "@/lib/data/members";
-import { trainers } from "@/lib/data/trainers";
-import { payments } from "@/lib/data/payments";
+import { useMember, useRenewMembership, useFreezeMembership, useUnfreezeMembership, useCancelMembership, useAddMemberNote } from "@/hooks/use-members";
+import { useTrainersRoster } from "@/hooks/use-trainers";
+import { useTransactionsRoster } from "@/hooks/use-transactions";
 import { attendanceRecords } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
 import { gymClasses } from "@/lib/data/classes";
 import { ptSessions } from "@/lib/data/pt-sessions";
 import { storeSales } from "@/lib/data/store-sales";
-import { getPlanByName, computeNextExpiry } from "@/lib/membership-helpers";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
+import { ApiError, NetworkError } from "@/lib/api/types";
 
-const TODAY = "2026-09-21";
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
+}
 
 export default function MemberDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const [members, setMembers] = React.useState(initialMembers);
-  const member = members.find((m) => m.id === params.id);
+  const { member, membership, isLoading } = useMember(params.id);
+  const { trainers } = useTrainersRoster();
+  const { payments: memberPayments } = useTransactionsRoster({ memberId: member?.id }, { enabled: !!member });
+  const renew = useRenewMembership();
+  const freeze = useFreezeMembership();
+  const unfreeze = useUnfreezeMembership();
+  const cancel = useCancelMembership();
+  const addNoteMutation = useAddMemberNote();
   const [noteDraft, setNoteDraft] = React.useState("");
-  const [notes, setNotes] = React.useState(member?.notes ?? []);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    );
+  }
 
   if (!member) {
     return (
@@ -68,33 +85,61 @@ export default function MemberDetailPage() {
   }
 
   const trainer = trainers.find((t) => t.id === member.trainerId);
-  const memberPayments = payments.filter((p) => p.memberName === member.name);
   const memberAttendance = attendanceRecords.filter((a) => a.memberId === member.id);
   const memberBookings = classBookings.filter((b) => b.memberName === member.name);
   const memberPt = ptSessions.filter((s) => s.memberName === member.name);
   const memberPurchases = storeSales.filter((s) => s.memberId === member.id);
+  const notes = member.notes;
 
-  function addNote() {
-    if (!noteDraft.trim()) return;
-    setNotes((prev) => [
-      { id: `note-${Date.now()}`, author: "Sam Carter", date: "2026-09-21", text: noteDraft.trim() },
-      ...prev,
-    ]);
-    setNoteDraft("");
-    toast.success("Note added");
+  async function addNote() {
+    if (!noteDraft.trim() || !member) return;
+    try {
+      await addNoteMutation.mutateAsync({ id: member.id, body: noteDraft.trim() });
+      setNoteDraft("");
+      toast.success("Note added");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't add this note."));
+    }
   }
 
-  function updateMemberStatus(status: "active" | "frozen" | "cancelled", extendExpiry = false) {
-    if (!member) return;
-    setMembers((prev) =>
-      prev.map((m) => {
-        if (m.id !== member.id) return m;
-        if (!extendExpiry) return { ...m, status };
-        const plan = getPlanByName(m.plan);
-        const newExpiry = computeNextExpiry(m.expiresOn, TODAY, plan?.billingPeriod ?? "month");
-        return { ...m, status, expiresOn: newExpiry, paymentStatus: "paid" };
-      })
-    );
+  async function handleRenew() {
+    if (!membership) return;
+    try {
+      await renew.mutateAsync({ id: membership.id });
+      toast.success(`${member!.name}'s membership renewed`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't renew this membership."));
+    }
+  }
+
+  async function handleFreeze() {
+    if (!membership) return;
+    try {
+      await freeze.mutateAsync(membership.id);
+      toast.success(`${member!.name}'s membership frozen`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't freeze this membership."));
+    }
+  }
+
+  async function handleUnfreeze() {
+    if (!membership) return;
+    try {
+      await unfreeze.mutateAsync(membership.id);
+      toast.success(`${member!.name}'s membership unfrozen`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't unfreeze this membership."));
+    }
+  }
+
+  async function handleCancel() {
+    if (!membership) return;
+    try {
+      await cancel.mutateAsync({ id: membership.id });
+      toast.success(`${member!.name}'s membership cancelled`);
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't cancel this membership."));
+    }
   }
 
   return (
@@ -106,53 +151,41 @@ export default function MemberDetailPage() {
 
       <PageHeader
         title={member.name}
-        description={`${member.plan} plan · Member since ${formatDate(member.joinedOn)}`}
+        description={`${member.expiresOn ? `${member.plan} plan` : member.plan} · Member since ${formatDate(member.joinedOn)}`}
         actions={
           <>
             <EditMemberDialog member={member} />
             <ConfirmActionDialog
-              trigger={<Button size="sm" variant="outline"><RefreshCcw className="size-4" />Renew</Button>}
+              trigger={<Button size="sm" variant="outline" disabled={!membership}><RefreshCcw className="size-4" />Renew</Button>}
               title={`Renew ${member.name}'s membership?`}
               description={`This will extend their ${member.plan} plan by one billing cycle.`}
               confirmLabel="Renew Membership"
-              onConfirm={() => {
-                updateMemberStatus("active", true);
-                toast.success(`${member.name}'s membership renewed`);
-              }}
+              onConfirm={handleRenew}
             />
             {member.status === "frozen" ? (
               <ConfirmActionDialog
-                trigger={<Button size="sm" variant="outline"><Snowflake className="size-4" />Unfreeze</Button>}
+                trigger={<Button size="sm" variant="outline" disabled={!membership}><Snowflake className="size-4" />Unfreeze</Button>}
                 title={`Unfreeze ${member.name}'s membership?`}
                 description="Their billing and access will resume immediately."
                 confirmLabel="Unfreeze Membership"
-                onConfirm={() => {
-                  updateMemberStatus("active");
-                  toast.success(`${member.name}'s membership unfrozen`);
-                }}
+                onConfirm={handleUnfreeze}
               />
             ) : (
               <ConfirmActionDialog
-                trigger={<Button size="sm" variant="outline"><Snowflake className="size-4" />Freeze</Button>}
+                trigger={<Button size="sm" variant="outline" disabled={!membership}><Snowflake className="size-4" />Freeze</Button>}
                 title={`Freeze ${member.name}'s membership?`}
                 description="Their billing and access will pause until unfrozen."
                 confirmLabel="Freeze Membership"
-                onConfirm={() => {
-                  updateMemberStatus("frozen");
-                  toast.success(`${member.name}'s membership frozen`);
-                }}
+                onConfirm={handleFreeze}
               />
             )}
             <ConfirmActionDialog
-              trigger={<Button size="sm" variant="destructive"><Ban className="size-4" />Cancel</Button>}
+              trigger={<Button size="sm" variant="destructive" disabled={!membership}><Ban className="size-4" />Cancel</Button>}
               title={`Cancel ${member.name}'s membership?`}
               description="This cancels their plan at the end of the current billing period."
               confirmLabel="Cancel Membership"
               destructive
-              onConfirm={() => {
-                updateMemberStatus("cancelled");
-                toast.success(`${member.name}'s membership cancelled`);
-              }}
+              onConfirm={handleCancel}
             />
           </>
         }
@@ -179,7 +212,7 @@ export default function MemberDetailPage() {
                 <Phone className="size-4 shrink-0" /> {member.phone}
               </div>
               <div className="flex items-center gap-2.5 text-muted-foreground">
-                <Cake className="size-4 shrink-0" /> {formatDate(member.dob)} · {member.gender}
+                <Cake className="size-4 shrink-0" /> {member.dob ? formatDate(member.dob) : "Not provided"} · {member.gender}
               </div>
               <div className="flex items-start gap-2.5 text-muted-foreground">
                 <MapPin className="size-4 shrink-0 mt-0.5" /> {member.address}
@@ -196,7 +229,7 @@ export default function MemberDetailPage() {
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Expires</dt>
-                <dd className="font-medium text-foreground">{formatDate(member.expiresOn)}</dd>
+                <dd className="font-medium text-foreground">{member.expiresOn ? formatDate(member.expiresOn) : "—"}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Trainer</dt>
@@ -204,7 +237,9 @@ export default function MemberDetailPage() {
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Lifetime value</dt>
-                <dd className="font-medium tabular text-foreground">{formatCurrency(member.lifetimeValue)}</dd>
+                <dd className="font-medium tabular text-foreground">
+                  {formatCurrency(memberPayments.filter((p) => p.status === "paid").reduce((sum, p) => sum + p.amount, 0))}
+                </dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Attendance this month</dt>

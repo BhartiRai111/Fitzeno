@@ -11,9 +11,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NotificationCenter } from "@/components/dashboard/notifications/notification-center";
 import { SendNotificationDialog } from "@/components/dashboard/dialogs/send-notification-dialog";
-import { ownerNotifications, sentAnnouncements as initialSentAnnouncements } from "@/lib/data/notifications";
+import { useOwnNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/hooks/use-notifications";
+import { useAnnouncements } from "@/hooks/use-announcements";
 import { formatDate } from "@/lib/utils-data";
-import type { NotificationItem, SentAnnouncement } from "@/lib/data/types";
+import type { NotificationItem } from "@/lib/data/types";
 
 type TabValue = "inbox" | "sent";
 
@@ -21,13 +22,19 @@ export function OwnerNotificationsPageClient() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get("tab") as TabValue) ?? "inbox";
   const [tab, setTab] = React.useState<TabValue>(initialTab);
-  const [notifications, setNotifications] = React.useState<NotificationItem[]>(ownerNotifications);
-  const [announcements, setAnnouncements] = React.useState<SentAnnouncement[]>(initialSentAnnouncements);
+  const { data, isLoading } = useOwnNotifications();
+  const { announcements } = useAnnouncements();
+  const markRead = useMarkNotificationRead();
+  const markAllRead = useMarkAllNotificationsRead();
 
+  const notifications = data?.items ?? [];
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  function handleSent(announcement: SentAnnouncement) {
-    setAnnouncements((prev) => [announcement, ...prev]);
+  function handleItemsChange(next: NotificationItem[]) {
+    for (const n of next) {
+      const prev = notifications.find((p) => p.id === n.id);
+      if (prev && !prev.read && n.read) markRead.mutate(n.id);
+    }
   }
 
   return (
@@ -38,15 +45,11 @@ export function OwnerNotificationsPageClient() {
         actions={
           <>
             {tab === "inbox" && unreadCount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))}
-              >
+              <Button variant="outline" size="sm" onClick={() => markAllRead.mutate()}>
                 Mark all as read
               </Button>
             )}
-            <SendNotificationDialog onSent={handleSent} />
+            <SendNotificationDialog />
           </>
         }
       />
@@ -60,7 +63,8 @@ export function OwnerNotificationsPageClient() {
         <TabsContent value="inbox" className="space-y-4">
           <NotificationCenter
             items={notifications}
-            onItemsChange={setNotifications}
+            onItemsChange={handleItemsChange}
+            loading={isLoading}
             emptyTitle="You're all caught up"
             emptyDescription="Leads, payments, renewals, and operational alerts will show up here."
           />

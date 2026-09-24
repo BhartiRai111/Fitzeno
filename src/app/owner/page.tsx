@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import {
   Wallet,
@@ -34,11 +36,13 @@ import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { PaymentStatusBadge } from "@/components/shared/status-badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { CalendarCheck2 } from "lucide-react";
 
-import { members } from "@/lib/data/members";
-import { leads } from "@/lib/data/leads";
-import { payments, revenueByMonth } from "@/lib/data/payments";
+import { useAuth } from "@/lib/auth/auth-context";
+import { useMembersRoster } from "@/hooks/use-members";
+import { useLeadsRoster } from "@/hooks/use-leads";
+import { useTransactionsRoster, useTransactionStats, useTransactionCount } from "@/hooks/use-transactions";
 import { gymClasses } from "@/lib/data/classes";
 import { attendanceRecords, weeklyAttendance } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
@@ -47,47 +51,77 @@ import { getLowStockProducts } from "@/lib/store-helpers";
 import { expenses } from "@/lib/data/expenses";
 import { getPendingExpenses } from "@/lib/finance-helpers";
 import { recentActivity } from "@/lib/data/activity";
-import { formatCurrency, formatDate, daysBetween } from "@/lib/utils-data";
+import { formatCurrency, formatDate } from "@/lib/utils-data";
 import { percentTrend } from "@/lib/reports-helpers";
 import type { AlertItem } from "@/lib/data/types";
 
-const TODAY = "2026-09-21";
+const MOCK_TODAY = "2026-09-21";
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 
 export default function OwnerOverviewPage() {
+  const { user, tenant } = useAuth();
+  const { members, isLoading: membersLoading } = useMembersRoster();
+  const { leads, isLoading: leadsLoading } = useLeadsRoster();
+  const { payments: recentTx } = useTransactionsRoster();
+
+  const now = new Date();
+  const todayIso = isoDate(now);
+  const monthStart = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  const prevMonthStart = isoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  const prevMonthEnd = isoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+
+  const todayStats = useTransactionStats(todayIso, todayIso);
+  const monthStats = useTransactionStats(monthStart, todayIso);
+  const prevMonthStats = useTransactionStats(prevMonthStart, prevMonthEnd);
+  const pendingCount = useTransactionCount({ status: "PENDING" });
+  const failedCount = useTransactionCount({ status: "FAILED" });
+
+  if (membersLoading || leadsLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-64" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 w-full" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
   const activeMembers = members.filter((m) => m.status === "active");
   const expiringMembers = members.filter((m) => m.status === "expiring");
   const expiredMembers = members.filter((m) => m.status === "expired");
   const frozenMembers = members.filter((m) => m.status === "frozen");
   const cancelledMembers = members.filter((m) => m.status === "cancelled");
-  const newMembersThisMonth = members.filter((m) => m.joinedOn.startsWith("2026-09"));
+  const currentYearMonth = isoDate(now).slice(0, 7);
+  const newMembersThisMonth = members.filter((m) => m.joinedOn.startsWith(currentYearMonth));
 
-  const todaysRevenue = payments
-    .filter((p) => p.date === TODAY && p.status === "paid")
-    .reduce((sum, p) => sum + p.amount, 0);
-  const monthlyRevenue = revenueByMonth[revenueByMonth.length - 1].revenue;
-  const prevMonthlyRevenue = revenueByMonth[revenueByMonth.length - 2].revenue;
+  const todaysRevenue = todayStats.data?.totalRevenue ?? 0;
+  const monthlyRevenue = monthStats.data?.totalRevenue ?? 0;
+  const prevMonthlyRevenue = prevMonthStats.data?.totalRevenue ?? 0;
 
-  const todaysAttendance = attendanceRecords.filter((a) => a.date === TODAY);
+  const todaysAttendance = attendanceRecords.filter((a) => a.date === MOCK_TODAY);
   const weeklyAvg = Math.round(weeklyAttendance.reduce((sum, d) => sum + d.visits, 0) / weeklyAttendance.length);
   const monthlyAttendance = weeklyAttendance.reduce((sum, d) => sum + d.visits, 0) * 4;
-  const mostActive = [...members].sort((a, b) => b.attendanceThisMonth - a.attendanceThisMonth).slice(0, 5);
 
-  const pendingPayments = payments.filter((p) => p.status === "pending");
-  const failedPayments = payments.filter((p) => p.status === "failed");
-  const recentPayments = [...payments].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 6);
+  const recentPayments = [...recentTx].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 6);
 
-  const followUpsToday = leads.filter((l) => l.nextFollowUp === TODAY);
+  const followUpsToday = leads.filter((l) => l.nextFollowUp === todayIso);
   const convertedLeads = leads.filter((l) => l.status === "converted");
-  const conversionRate = ((convertedLeads.length / leads.length) * 100).toFixed(0);
+  const conversionRate = leads.length > 0 ? ((convertedLeads.length / leads.length) * 100).toFixed(0) : "0";
 
   const todaysClasses = gymClasses.filter((c) => c.day === "Mon");
   const classesWithWaitlist = new Set(
     classBookings.filter((b) => b.status === "waitlisted").map((b) => b.classId)
   );
 
-  const inactive14Plus = members.filter((m) => daysBetween(m.lastCheckIn, TODAY) >= 14);
   const leadsNeedingFollowUp = leads.filter(
-    (l) => l.nextFollowUp && l.nextFollowUp <= TODAY && l.status !== "converted" && l.status !== "lost"
+    (l) => l.nextFollowUp && l.nextFollowUp <= todayIso && l.status !== "converted" && l.status !== "lost"
   );
   const lowStockProducts = getLowStockProducts(products);
   const pendingExpenses = getPendingExpenses(expenses);
@@ -102,20 +136,14 @@ export default function OwnerOverviewPage() {
     {
       id: "a2",
       severity: "medium",
-      message: `${pendingPayments.length} pending payments`,
+      message: `${pendingCount} pending payments`,
       href: "/owner/payments?tab=pending",
     },
     {
       id: "a3",
       severity: "high",
-      message: `${failedPayments.length} failed payments`,
+      message: `${failedCount} failed payments`,
       href: "/owner/payments?tab=pending",
-    },
-    {
-      id: "a4",
-      severity: "medium",
-      message: `${inactive14Plus.length} members inactive for 14+ days`,
-      href: "/owner/attendance?tab=insights",
     },
     {
       id: "a5",
@@ -147,8 +175,8 @@ export default function OwnerOverviewPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Good morning, Sam"
-        description="Here's how Fitzeno — Riverside District is doing today, Monday 21 September."
+        title={`Good morning${user ? `, ${user.firstName}` : ""}`}
+        description={`Here's how ${tenant?.name ?? "your gym"} is doing today, ${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}.`}
         actions={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -199,7 +227,7 @@ export default function OwnerOverviewPage() {
           label="Active Members"
           value={activeMembers.length.toString()}
           icon={Users}
-          helpText={`${Math.round((activeMembers.length / members.length) * 100)}% of all members`}
+          helpText={members.length > 0 ? `${Math.round((activeMembers.length / members.length) * 100)}% of all members` : "no members yet"}
         />
         <StatCard
           label="New Members"
@@ -211,7 +239,7 @@ export default function OwnerOverviewPage() {
           label="Today's Revenue"
           value={formatCurrency(todaysRevenue)}
           icon={Wallet}
-          helpText={`${payments.filter((p) => p.date === TODAY).length} transactions`}
+          helpText={`${todayStats.data?.paidCount ?? 0} transactions`}
         />
         <StatCard
           label="Monthly Revenue"
@@ -270,7 +298,7 @@ export default function OwnerOverviewPage() {
             </CardAction>
           </CardHeader>
           <CardContent>
-            <ExpiringMembersList members={expiringMembers} today={TODAY} />
+            <ExpiringMembersList members={expiringMembers} today={todayIso} />
           </CardContent>
         </Card>
       </div>
@@ -310,7 +338,7 @@ export default function OwnerOverviewPage() {
         <Card>
           <CardHeader>
             <CardTitle>Follow-ups today</CardTitle>
-            <CardDescription>{formatDate(TODAY)}</CardDescription>
+            <CardDescription>{formatDate(todayIso)}</CardDescription>
           </CardHeader>
           <CardContent>
             {followUpsToday.length === 0 ? (
@@ -371,22 +399,9 @@ export default function OwnerOverviewPage() {
               </div>
             </div>
             <PeakHoursChart />
-            <div className="mt-4 border-t border-border pt-3">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Most active this month</p>
-              <div className="flex flex-wrap gap-2">
-                {mostActive.slice(0, 5).map((member) => (
-                  <div
-                    key={member.id}
-                    className="flex items-center gap-1.5 rounded-full border border-border py-1 pl-1 pr-2.5"
-                  >
-                    <Avatar className="size-5">
-                      <AvatarFallback className="text-[10px]">{member.initials}</AvatarFallback>
-                    </Avatar>
-                    <span className="text-xs font-medium text-foreground">{member.attendanceThisMonth}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <p className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
+              Check-in tracking isn&apos;t connected yet — attendance figures above are illustrative.
+            </p>
             <Button variant="ghost" size="sm" className="mt-3 w-full" asChild>
               <Link href="/owner/attendance">
                 View attendance
@@ -402,7 +417,7 @@ export default function OwnerOverviewPage() {
             <CardDescription>Haven&apos;t checked in recently</CardDescription>
           </CardHeader>
           <CardContent>
-            <AtRiskMembers members={members} today={TODAY} />
+            <AtRiskMembers members={members} today={todayIso} />
           </CardContent>
         </Card>
       </div>

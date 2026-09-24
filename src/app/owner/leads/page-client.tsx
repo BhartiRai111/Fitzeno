@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -33,11 +34,20 @@ import { LeadStatusBadge } from "@/components/shared/status-badge";
 import { LeadFunnel } from "@/components/dashboard/lead-funnel";
 import { LeadDetailSheet } from "@/components/dashboard/lead-detail-sheet";
 import { AddLeadDialog, type NewLeadInput } from "@/components/dashboard/dialogs/add-lead-dialog";
-import { leads as initialLeads } from "@/lib/data/leads";
-import { staffMembers } from "@/lib/data/staff";
-import { trainers } from "@/lib/data/trainers";
-import { membershipPlans } from "@/lib/data/plans";
+import {
+  useLeadsRoster,
+  useLead,
+  useCreateLead,
+  useUpdateLead,
+  useAddLeadNote,
+  useConvertLead,
+  leadSourceToBackend,
+  leadLostReasonToBackend,
+} from "@/hooks/use-leads";
+import { useCreateMembership } from "@/hooks/use-members";
+import { useStaffDirectory } from "@/hooks/use-staff";
 import { formatDate } from "@/lib/utils-data";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import {
   TODAY,
   LEAD_SOURCES,
@@ -49,14 +59,16 @@ import {
   getTrialConversionRate,
   getClassLabel,
 } from "@/lib/lead-helpers";
-import type { Lead, LeadLostReason } from "@/lib/data/types";
+import type { LeadLostReason } from "@/lib/data/types";
 
 type TabValue = "all" | "new" | "followups" | "trials" | "converted" | "lost" | "insights";
 
-const CURRENT_USER = "Sam Carter";
-
 function initialsFor(name: string): string {
   return name.split(" ").map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "?";
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
 }
 
 export function LeadsPageClient() {
@@ -64,7 +76,14 @@ export function LeadsPageClient() {
   const initialTab = (searchParams.get("tab") as TabValue) ?? "all";
   const initialLeadId = searchParams.get("leadId");
 
-  const [leads, setLeads] = React.useState<Lead[]>(initialLeads);
+  const { leads, isLoading } = useLeadsRoster();
+  const { staff } = useStaffDirectory();
+  const createLead = useCreateLead();
+  const updateLead = useUpdateLead();
+  const addNote = useAddLeadNote();
+  const convertLead = useConvertLead();
+  const createMembership = useCreateMembership();
+
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [sourceFilter, setSourceFilter] = React.useState("all");
@@ -72,160 +91,130 @@ export function LeadsPageClient() {
   const [selectedLeadId, setSelectedLeadId] = React.useState<string | null>(initialLeadId);
   const [sheetOpen, setSheetOpen] = React.useState(!!initialLeadId);
 
-  const assigneeOptions = React.useMemo(
-    () => Array.from(new Set(["Front Desk", ...staffMembers.map((s) => s.name), ...trainers.map((t) => t.name)])),
-    []
-  );
+  const assigneeOptions = React.useMemo(() => Array.from(new Set(staff.map((s) => s.name))), [staff]);
+  const assigneeIdByName = React.useMemo(() => new Map(staff.map((s) => [s.name, s.id])), [staff]);
 
-  const selectedLead = leads.find((l) => l.id === selectedLeadId) ?? null;
+  const { lead: selectedLead } = useLead(selectedLeadId ?? "");
 
-  function findLead(id: string) {
-    return leads.find((l) => l.id === id);
-  }
-
-  function appendNote(lead: Lead, text: string): Lead["notes"] {
-    return [...lead.notes, { id: `n-${Date.now()}`, author: CURRENT_USER, date: TODAY, text }];
-  }
-
-  function openLead(lead: Lead) {
-    setSelectedLeadId(lead.id);
+  function openLead(id: string) {
+    setSelectedLeadId(id);
     setSheetOpen(true);
   }
 
-  function handleAdd(input: NewLeadInput) {
-    const newLead: Lead = {
-      id: `l-${Date.now()}`,
-      name: input.name,
-      initials: initialsFor(input.name),
-      email: input.email,
-      phone: input.phone,
-      source: input.source,
-      interest: input.interest,
-      status: "new",
-      createdOn: TODAY,
-      lastActivity: TODAY,
-      nextFollowUp: TODAY,
-      assignedTo: input.assignedTo,
-      notes: [],
-    };
-    setLeads((prev) => [newLead, ...prev]);
+  async function handleAdd(input: NewLeadInput) {
+    try {
+      await createLead.mutateAsync({
+        firstName: input.name.trim().split(/\s+/)[0] || input.name,
+        lastName: input.name.trim().split(/\s+/).slice(1).join(" ") || input.name.trim().split(/\s+/)[0],
+        email: input.email || undefined,
+        phone: input.phone || undefined,
+        source: leadSourceToBackend(input.source),
+        interest: input.interest || undefined,
+        assignedToId: assigneeIdByName.get(input.assignedTo),
+      });
+      toast.success("Lead added", { description: `${input.name || "New lead"} has been added to your pipeline.` });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't add this lead."));
+      throw err;
+    }
   }
 
-  function handleLogActivity(id: string, text: string, nextFollowUp: string | null) {
-    const lead = findLead(id);
-    if (!lead) return;
-    const advancesToContacted = lead.status === "new";
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? { ...l, notes: appendNote(l, text), lastActivity: TODAY, nextFollowUp, status: advancesToContacted ? "contacted" : l.status }
-          : l
-      )
-    );
-    toast.success("Activity logged", { description: advancesToContacted ? `${lead.name} moved to Contacted.` : undefined });
+  async function handleLogActivity(id: string, text: string, nextFollowUp: string | null) {
+    const lead = leads.find((l) => l.id === id);
+    try {
+      await addNote.mutateAsync({ id, body: text });
+      const advancesToContacted = lead?.status === "new";
+      await updateLead.mutateAsync({
+        id,
+        input: { nextFollowUpAt: nextFollowUp, status: advancesToContacted ? "CONTACTED" : undefined },
+      });
+      toast.success("Activity logged", { description: advancesToContacted ? `${lead?.name} moved to Contacted.` : undefined });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't log this activity."));
+    }
   }
 
-  function handleScheduleTrial(id: string, classId: string, trialDate: string) {
-    const lead = findLead(id);
-    if (!lead) return;
+  async function handleScheduleTrial(id: string, classId: string, trialDate: string) {
+    const lead = leads.find((l) => l.id === id);
     const label = getClassLabel(classId) ?? "a class";
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? {
-              ...l,
-              status: "trial-booked",
-              trialClassId: classId,
-              trialDate,
-              lastActivity: TODAY,
-              notes: appendNote(l, `Trial scheduled — ${label} on ${formatDate(trialDate)}.`),
-            }
-          : l
-      )
-    );
-    toast.success("Trial scheduled", { description: `${lead.name} · ${label}` });
+    try {
+      await updateLead.mutateAsync({
+        id,
+        input: { status: "TRIAL_SCHEDULED", trialScheduledAt: trialDate, trialNotes: label },
+      });
+      await addNote.mutateAsync({ id, body: `Trial scheduled — ${label} on ${formatDate(trialDate)}.` });
+      toast.success("Trial scheduled", { description: `${lead?.name} · ${label}` });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't schedule this trial."));
+    }
   }
 
-  function handleMarkTrialAttended(id: string) {
-    const lead = findLead(id);
-    if (!lead) return;
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, status: "trial-attended", lastActivity: TODAY, notes: appendNote(l, "Attended their trial session.") } : l
-      )
-    );
-    toast.success("Marked as attended");
+  async function handleMarkTrialAttended(id: string) {
+    try {
+      await updateLead.mutateAsync({ id, input: { status: "TRIAL_COMPLETED" } });
+      await addNote.mutateAsync({ id, body: "Attended their trial session." });
+      toast.success("Marked as attended");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't update this lead."));
+    }
   }
 
-  function handleMoveToFollowUp(id: string) {
-    const lead = findLead(id);
-    if (!lead) return;
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, status: "follow-up", lastActivity: TODAY, notes: appendNote(l, "Not ready yet — moved to follow-up for later.") } : l
-      )
-    );
-    toast.success("Moved to follow-up");
+  async function handleMoveToFollowUp(id: string) {
+    try {
+      await updateLead.mutateAsync({ id, input: { status: "FOLLOW_UP" } });
+      await addNote.mutateAsync({ id, body: "Not ready yet — moved to follow-up for later." });
+      toast.success("Moved to follow-up");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't update this lead."));
+    }
   }
 
-  function handleConvert(id: string, planId: string) {
-    const lead = findLead(id);
-    if (!lead) return;
-    const plan = membershipPlans.find((p) => p.id === planId);
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? {
-              ...l,
-              status: "converted",
-              convertedPlanId: planId,
-              convertedOn: TODAY,
-              nextFollowUp: null,
-              lastActivity: TODAY,
-              notes: appendNote(l, `Converted — signed up for the ${plan?.name ?? "selected"} plan.`),
-            }
-          : l
-      )
-    );
-    toast.success(`${lead.name} converted!`, { description: `Selected the ${plan?.name} plan — finish their setup in Members.` });
+  async function handleConvert(id: string, planId: string) {
+    const lead = leads.find((l) => l.id === id);
+    try {
+      const member = await convertLead.mutateAsync({ id, input: {} });
+      if (planId) {
+        await createMembership.mutateAsync({ memberId: member.id, planId });
+      }
+      toast.success(`${lead?.name ?? "Lead"} converted!`, { description: "Finish their setup in Members." });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't convert this lead."));
+    }
   }
 
-  function handleMarkLost(id: string, reason: LeadLostReason, note: string) {
-    const lead = findLead(id);
-    if (!lead) return;
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? {
-              ...l,
-              status: "lost",
-              lostReason: reason,
-              nextFollowUp: null,
-              lastActivity: TODAY,
-              notes: appendNote(l, note || `Marked lost — ${reason}.`),
-            }
-          : l
-      )
-    );
-    toast(`${lead.name} marked as lost`, { description: reason });
+  async function handleMarkLost(id: string, reason: LeadLostReason, note: string) {
+    const lead = leads.find((l) => l.id === id);
+    try {
+      await updateLead.mutateAsync({ id, input: { status: "LOST", lostReason: leadLostReasonToBackend(reason) } });
+      await addNote.mutateAsync({ id, body: note || `Marked lost — ${reason}.` });
+      toast(`${lead?.name ?? "Lead"} marked as lost`, { description: reason });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't update this lead."));
+    }
   }
 
-  function handleReopen(id: string) {
-    const lead = findLead(id);
-    if (!lead) return;
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id
-          ? { ...l, status: "follow-up", lostReason: undefined, nextFollowUp: TODAY, lastActivity: TODAY, notes: appendNote(l, "Reopened — reconsidering after previously being marked lost.") }
-          : l
-      )
-    );
-    toast.success("Lead reopened");
+  async function handleReopen(id: string) {
+    try {
+      await updateLead.mutateAsync({ id, input: { status: "FOLLOW_UP", nextFollowUpAt: TODAY } });
+      await addNote.mutateAsync({ id, body: "Reopened — reconsidering after previously being marked lost." });
+      toast.success("Lead reopened");
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't reopen this lead."));
+    }
   }
 
-  function handleReassign(id: string, assignee: string) {
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, assignedTo: assignee } : l)));
-    toast.success("Reassigned", { description: assignee });
+  async function handleReassign(id: string, assignee: string) {
+    const assignedToId = assigneeIdByName.get(assignee);
+    if (!assignedToId) {
+      toast.error("Couldn't find that staff member.");
+      return;
+    }
+    try {
+      await updateLead.mutateAsync({ id, input: { assignedToId } });
+      toast.success("Reassigned", { description: assignee });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't reassign this lead."));
+    }
   }
 
   const stats = getLeadStats(leads);
@@ -272,7 +261,7 @@ export function LeadsPageClient() {
       <PageHeader
         title="Leads & Enquiries"
         description={`${leads.length} total leads · ${stats.conversionRate}% conversion rate`}
-        actions={<AddLeadDialog assigneeOptions={assigneeOptions} onAdd={handleAdd} />}
+        actions={<AddLeadDialog assigneeOptions={assigneeOptions.length > 0 ? assigneeOptions : ["Front Desk"]} onAdd={handleAdd} />}
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -425,11 +414,17 @@ export function LeadsPageClient() {
               </Select>
             </Card>
 
-            {filtered.length === 0 ? (
+            {isLoading ? (
+              <Card className="space-y-3 p-4">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </Card>
+            ) : filtered.length === 0 ? (
               <EmptyState
                 icon={UserRoundSearch}
-                title="No leads match these filters"
-                description="Try adjusting your search or filters."
+                title={leads.length === 0 ? "No leads yet" : "No leads match these filters"}
+                description={leads.length === 0 ? "Add your first enquiry to start the pipeline." : "Try adjusting your search or filters."}
                 action={{ label: "Reset filters", onClick: () => { setSearch(""); setSourceFilter("all"); setAssigneeFilter("all"); } }}
               />
             ) : (
@@ -454,7 +449,7 @@ export function LeadsPageClient() {
                         return (
                           <tr key={lead.id} className="border-b border-border last:border-0 hover:bg-muted/30">
                             <td className="px-4 py-3">
-                              <button onClick={() => openLead(lead)} className="flex items-center gap-2.5 text-left">
+                              <button onClick={() => openLead(lead.id)} className="flex items-center gap-2.5 text-left">
                                 <Avatar className="size-8 shrink-0">
                                   <AvatarFallback className="text-xs">{lead.initials}</AvatarFallback>
                                 </Avatar>
@@ -465,8 +460,8 @@ export function LeadsPageClient() {
                               </button>
                             </td>
                             <td className="px-4 py-3 text-muted-foreground">{lead.source}</td>
-                            <td className="px-4 py-3 text-muted-foreground">{lead.interest}</td>
-                            <td className="px-4 py-3 text-muted-foreground">{lead.assignedTo}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{lead.interest || "—"}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{lead.assignedTo || "Unassigned"}</td>
                             <td className="px-4 py-3">
                               {lead.nextFollowUp ? (
                                 <span className={overdue ? "font-medium text-danger" : dueToday ? "font-medium text-warning" : "text-muted-foreground"}>
@@ -479,7 +474,7 @@ export function LeadsPageClient() {
                             </td>
                             <td className="px-4 py-3"><LeadStatusBadge status={lead.status} /></td>
                             <td className="px-4 py-3 text-right">
-                              <Button size="sm" variant="ghost" onClick={() => openLead(lead)}>View</Button>
+                              <Button size="sm" variant="ghost" onClick={() => openLead(lead.id)}>View</Button>
                             </td>
                           </tr>
                         );
@@ -494,10 +489,10 @@ export function LeadsPageClient() {
       </Tabs>
 
       <LeadDetailSheet
-        lead={selectedLead}
+        lead={selectedLead ?? null}
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        assigneeOptions={assigneeOptions}
+        assigneeOptions={assigneeOptions.length > 0 ? assigneeOptions : ["Front Desk"]}
         onLogActivity={handleLogActivity}
         onScheduleTrial={handleScheduleTrial}
         onMarkTrialAttended={handleMarkTrialAttended}

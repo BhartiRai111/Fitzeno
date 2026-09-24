@@ -24,34 +24,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { members } from "@/lib/data/members";
-import { trainers } from "@/lib/data/trainers";
-import { staffMembers } from "@/lib/data/staff";
-import { gymProfile } from "@/lib/data/gym";
-import { TODAY } from "@/lib/booking-helpers";
-import type { NotificationPriority, SentAnnouncement } from "@/lib/data/types";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
+import { useAudienceCount, useSendAnnouncement } from "@/hooks/use-announcements";
+import type { BackendAnnouncementAudience } from "@/lib/api/announcements";
+import { ApiError, NetworkError } from "@/lib/api/types";
+import type { NotificationPriority } from "@/lib/data/types";
 
 interface SendNotificationDialogProps {
   trigger?: React.ReactNode;
-  onSent?: (announcement: SentAnnouncement) => void;
 }
 
-const sampleTotal = members.length;
-const scaleFactor = gymProfile.memberCount / sampleTotal;
-function estimateMembers(sampleCount: number) {
-  return Math.max(1, Math.round(sampleCount * scaleFactor));
-}
-
-const audienceOptions = [
-  { value: "all", label: "All members", count: gymProfile.memberCount },
-  { value: "active", label: "Active members", count: estimateMembers(members.filter((m) => m.status === "active").length) },
-  { value: "expiring", label: "Members expiring soon", count: estimateMembers(members.filter((m) => m.status === "expiring").length) },
-  { value: "growth", label: "Growth plan members", count: estimateMembers(members.filter((m) => m.plan === "Growth").length) },
-  { value: "elite", label: "Elite plan members", count: estimateMembers(members.filter((m) => m.plan === "Elite").length) },
-  { value: "trainers", label: "All trainers", count: trainers.length },
-  { value: "staff", label: "Front desk staff", count: staffMembers.filter((s) => s.accessRole === "front-desk").length },
-  { value: "trainers-staff", label: "All trainers & staff", count: trainers.length + staffMembers.length },
-] as const;
+type AudienceValue = Exclude<BackendAnnouncementAudience, "PLAN_MEMBERS" | "SPECIFIC_MEMBERS"> | `PLAN:${string}`;
 
 const priorityOptions: { value: NotificationPriority; label: string; description: string }[] = [
   { value: "low", label: "Low", description: "FYI — no rush to read." },
@@ -59,45 +42,63 @@ const priorityOptions: { value: NotificationPriority; label: string; description
   { value: "high", label: "Important", description: "Time-sensitive — flagged for attention." },
 ];
 
-export function SendNotificationDialog({ trigger, onSent }: SendNotificationDialogProps) {
+const PRIORITY_TO_BACKEND: Record<NotificationPriority, "LOW" | "MEDIUM" | "HIGH"> = {
+  low: "LOW",
+  medium: "MEDIUM",
+  high: "HIGH",
+};
+
+function AudienceCountLabel({ audience, planId }: { audience: BackendAnnouncementAudience; planId?: string }) {
+  const { data: count, isLoading } = useAudienceCount(audience, planId);
+  return (
+    <p className="text-xs text-muted-foreground">
+      {isLoading ? "Calculating recipients..." : `~${(count ?? 0).toLocaleString()} recipient${count === 1 ? "" : "s"} will receive this.`}
+    </p>
+  );
+}
+
+export function SendNotificationDialog({ trigger }: SendNotificationDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
-  const [audience, setAudience] = React.useState<(typeof audienceOptions)[number]["value"]>("all");
+  const [audienceValue, setAudienceValue] = React.useState<AudienceValue>("ALL_MEMBERS");
   const [priority, setPriority] = React.useState<NotificationPriority>("medium");
   const [title, setTitle] = React.useState("");
   const [message, setMessage] = React.useState("");
+  const { plans } = useMembershipPlans();
+  const sendAnnouncement = useSendAnnouncement();
 
-  const selectedAudience = audienceOptions.find((a) => a.value === audience) ?? audienceOptions[0];
+  const isPlanAudience = audienceValue.startsWith("PLAN:");
+  const audience: BackendAnnouncementAudience = isPlanAudience ? "PLAN_MEMBERS" : (audienceValue as BackendAnnouncementAudience);
+  const planId = isPlanAudience ? audienceValue.slice(5) : undefined;
 
   function resetForm() {
-    setAudience("all");
+    setAudienceValue("ALL_MEMBERS");
     setPriority("medium");
     setTitle("");
     setMessage("");
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      setOpen(false);
-      const announcement: SentAnnouncement = {
-        id: `sa-${Date.now()}`,
+    try {
+      const result = await sendAnnouncement.mutateAsync({
         title: title.trim() || "Gym announcement",
         message: message.trim(),
-        audienceLabel: selectedAudience.label,
-        recipientCount: selectedAudience.count,
-        priority,
-        sentBy: "Sam Carter",
-        sentOn: TODAY,
-      };
-      onSent?.(announcement);
+        priority: PRIORITY_TO_BACKEND[priority],
+        audience,
+        planId,
+      });
+      setOpen(false);
       toast.success("Announcement sent", {
-        description: `Delivered to ~${selectedAudience.count.toLocaleString()} recipient${selectedAudience.count === 1 ? "" : "s"} (${selectedAudience.label}).`,
+        description: `Delivered to ~${result.recipientCount.toLocaleString()} recipient${result.recipientCount === 1 ? "" : "s"}.`,
       });
       resetForm();
-    }, 700);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't send this announcement.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -118,21 +119,23 @@ export function SendNotificationDialog({ trigger, onSent }: SendNotificationDial
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label>Audience</Label>
-            <Select value={audience} onValueChange={(v) => setAudience(v as typeof audience)}>
+            <Select value={audienceValue} onValueChange={(v) => setAudienceValue(v as AudienceValue)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {audienceOptions.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
+                <SelectItem value="ALL_MEMBERS">All members</SelectItem>
+                <SelectItem value="ACTIVE_MEMBERS">Active members</SelectItem>
+                <SelectItem value="EXPIRING_MEMBERS">Members expiring soon</SelectItem>
+                {plans.map((plan) => (
+                  <SelectItem key={plan.id} value={`PLAN:${plan.id}`}>{plan.name} plan members</SelectItem>
                 ))}
+                <SelectItem value="ALL_TRAINERS">All trainers</SelectItem>
+                <SelectItem value="ALL_STAFF">All staff</SelectItem>
+                <SelectItem value="TRAINERS_AND_STAFF">All trainers & staff</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              ~{selectedAudience.count.toLocaleString()} recipient{selectedAudience.count === 1 ? "" : "s"} will receive this.
-            </p>
+            {open && <AudienceCountLabel audience={audience} planId={planId} />}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="notification-title">Title</Label>
@@ -174,13 +177,10 @@ export function SendNotificationDialog({ trigger, onSent }: SendNotificationDial
           <div className="space-y-2">
             <Label>Channels</Label>
             <div className="flex items-center gap-2">
-              <Checkbox id="channel-inapp" defaultChecked />
+              <Checkbox id="channel-inapp" checked disabled />
               <Label htmlFor="channel-inapp" className="font-normal">In-app notification</Label>
             </div>
-            <div className="flex items-center gap-2">
-              <Checkbox id="channel-email" defaultChecked />
-              <Label htmlFor="channel-email" className="font-normal">Email</Label>
-            </div>
+            <p className="text-xs text-muted-foreground/70">Email delivery isn&apos;t connected yet — announcements are in-app only for now.</p>
           </div>
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

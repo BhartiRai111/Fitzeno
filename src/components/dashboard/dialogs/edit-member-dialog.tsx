@@ -22,8 +22,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { membershipPlans } from "@/lib/data/plans";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
+import { useUpdateMember } from "@/hooks/use-members";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import type { Member } from "@/lib/data/types";
 
 interface EditMemberDialogProps {
@@ -32,17 +33,45 @@ interface EditMemberDialogProps {
 }
 
 export function EditMemberDialog({ member, trigger }: EditMemberDialogProps) {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpenState] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [trainerId, setTrainerId] = React.useState(member.trainerId ?? "none");
+  const { trainers } = useTrainersRoster();
+  const updateMember = useUpdateMember();
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  function setOpen(next: boolean) {
+    if (next) setTrainerId(member.trainerId ?? "none");
+    setOpenState(next);
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") ?? "").trim();
+    const [firstName, ...rest] = name.split(/\s+/);
+    const lastName = rest.join(" ") || firstName;
+    const phone = String(form.get("phone") ?? "").trim();
+    const email = String(form.get("email") ?? "").trim();
+
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await updateMember.mutateAsync({
+        id: member.id,
+        input: {
+          firstName,
+          lastName,
+          phone: phone || undefined,
+          email: email || undefined,
+          trainerId: trainerId === "none" ? null : trainerId,
+        },
+      });
       setOpen(false);
       toast.success("Member details updated");
-    }, 700);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't update this member.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -75,38 +104,22 @@ export function EditMemberDialog({ member, trigger }: EditMemberDialogProps) {
             <Label htmlFor="edit-member-email">Email address</Label>
             <Input id="edit-member-email" name="email" type="email" defaultValue={member.email} required />
           </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Membership plan</Label>
-              <Select defaultValue={membershipPlans.find((p) => p.name === member.plan)?.id ?? membershipPlans[0].id}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {membershipPlans.map((plan) => (
-                    <SelectItem key={plan.id} value={plan.id}>
-                      {plan.name} — £{plan.price}/mo
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Assigned trainer</Label>
-              <Select defaultValue={member.trainerId ?? "none"}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Unassigned</SelectItem>
-                  {trainers.map((trainer) => (
-                    <SelectItem key={trainer.id} value={trainer.id}>
-                      {trainer.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          <div className="space-y-1.5">
+            <Label>Assigned trainer</Label>
+            <Select value={trainerId} onValueChange={setTrainerId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {trainers.map((trainer) => (
+                  <SelectItem key={trainer.id} value={trainer.id}>
+                    {trainer.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">To change their membership plan, use Renew from the member&apos;s profile.</p>
           </div>
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

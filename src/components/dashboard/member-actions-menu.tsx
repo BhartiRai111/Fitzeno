@@ -13,9 +13,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EditMemberDialog } from "@/components/dashboard/dialogs/edit-member-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
+import { useRenewMembership, useFreezeMembership, useCancelMembership } from "@/hooks/use-members";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import type { Member } from "@/lib/data/types";
 
-export function MemberActionsMenu({ member }: { member: Member }) {
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
+}
+
+export function MemberActionsMenu({ member, membershipId }: { member: Member; membershipId?: string | null }) {
+  const renew = useRenewMembership();
+  const freeze = useFreezeMembership();
+  const cancel = useCancelMembership();
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -42,7 +52,7 @@ export function MemberActionsMenu({ member }: { member: Member }) {
         <DropdownMenuSeparator />
         <ConfirmActionDialog
           trigger={
-            <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+            <DropdownMenuItem disabled={!membershipId} onSelect={(e) => e.preventDefault()}>
               <RefreshCcw />
               Renew
             </DropdownMenuItem>
@@ -50,11 +60,19 @@ export function MemberActionsMenu({ member }: { member: Member }) {
           title={`Renew ${member.name}'s membership?`}
           description={`This will extend their ${member.plan} plan by one billing cycle.`}
           confirmLabel="Renew Membership"
-          onConfirm={() => toast.success(`${member.name}'s membership renewed`)}
+          onConfirm={async () => {
+            if (!membershipId) return;
+            try {
+              await renew.mutateAsync({ id: membershipId });
+              toast.success(`${member.name}'s membership renewed`);
+            } catch (err) {
+              toast.error(errorMessage(err, "Couldn't renew this membership."));
+            }
+          }}
         />
         <ConfirmActionDialog
           trigger={
-            <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+            <DropdownMenuItem disabled={!membershipId} onSelect={(e) => e.preventDefault()}>
               <Snowflake />
               Freeze
             </DropdownMenuItem>
@@ -62,11 +80,19 @@ export function MemberActionsMenu({ member }: { member: Member }) {
           title={`Freeze ${member.name}'s membership?`}
           description="Their billing and access will pause until unfrozen."
           confirmLabel="Freeze Membership"
-          onConfirm={() => toast.success(`${member.name}'s membership frozen`)}
+          onConfirm={async () => {
+            if (!membershipId) return;
+            try {
+              await freeze.mutateAsync(membershipId);
+              toast.success(`${member.name}'s membership frozen`);
+            } catch (err) {
+              toast.error(errorMessage(err, "Couldn't freeze this membership."));
+            }
+          }}
         />
         <ConfirmActionDialog
           trigger={
-            <DropdownMenuItem variant="destructive" onSelect={(e) => e.preventDefault()}>
+            <DropdownMenuItem variant="destructive" disabled={!membershipId} onSelect={(e) => e.preventDefault()}>
               <Ban />
               Cancel
             </DropdownMenuItem>
@@ -75,7 +101,15 @@ export function MemberActionsMenu({ member }: { member: Member }) {
           description="This cancels their plan at the end of the current billing period. This can't be easily undone."
           confirmLabel="Cancel Membership"
           destructive
-          onConfirm={() => toast.success(`${member.name}'s membership cancelled`)}
+          onConfirm={async () => {
+            if (!membershipId) return;
+            try {
+              await cancel.mutateAsync({ id: membershipId });
+              toast.success(`${member.name}'s membership cancelled`);
+            } catch (err) {
+              toast.error(errorMessage(err, "Couldn't cancel this membership."));
+            }
+          }}
         />
       </DropdownMenuContent>
     </DropdownMenu>

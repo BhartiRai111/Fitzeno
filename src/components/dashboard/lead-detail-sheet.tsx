@@ -36,7 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LeadStatusBadge } from "@/components/shared/status-badge";
-import { membershipPlans } from "@/lib/data/plans";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
 import { formatDate } from "@/lib/utils-data";
 import { TODAY, LEAD_LOST_REASONS, getTrialClassOptions, getClassLabel } from "@/lib/lead-helpers";
 import type { Lead, LeadLostReason } from "@/lib/data/types";
@@ -79,7 +79,9 @@ function LeadDetailBody({
   const [trialClassId, setTrialClassId] = React.useState(trialOptions[0]?.id ?? "");
   const [lostReason, setLostReason] = React.useState<LeadLostReason>("No response");
   const [lostNote, setLostNote] = React.useState("");
-  const [planId, setPlanId] = React.useState(membershipPlans[1]?.id ?? "");
+  const { plans: membershipPlans } = useMembershipPlans();
+  const [planIdOverride, setPlanIdOverride] = React.useState<string | null>(null);
+  const planId = planIdOverride ?? membershipPlans[0]?.id ?? "";
 
   const isActive = lead.status !== "converted" && lead.status !== "lost";
 
@@ -152,7 +154,7 @@ function LeadDetailBody({
             <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/30 p-3 text-sm">
               <CalendarPlus className="size-4 shrink-0 text-primary" />
               <div>
-                <p className="font-medium text-foreground">Trial: {getClassLabel(lead.trialClassId)}</p>
+                <p className="font-medium text-foreground">Trial: {getClassLabel(lead.trialClassId) ?? lead.trialNotes ?? "Scheduled"}</p>
                 <p className="text-muted-foreground">{lead.trialDate ? formatDate(lead.trialDate) : "—"}</p>
               </div>
             </div>
@@ -238,7 +240,7 @@ function LeadDetailBody({
               <p className="text-sm font-medium text-foreground">Convert to member</p>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Membership plan</Label>
-                <Select value={planId} onValueChange={setPlanId}>
+                <Select value={planId} onValueChange={setPlanIdOverride}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {membershipPlans.map((p) => (

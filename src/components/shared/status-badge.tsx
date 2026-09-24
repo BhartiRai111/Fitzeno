@@ -8,6 +8,8 @@ const membershipConfig: Record<MembershipStatus, { label: string; variant: "succ
   frozen: { label: "Frozen", variant: "info" },
   trial: { label: "Trial", variant: "default" },
   cancelled: { label: "Cancelled", variant: "default" },
+  pending: { label: "Starts Soon", variant: "info" },
+  none: { label: "No Plan", variant: "default" },
 };
 
 const leadConfig: Record<LeadStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {
@@ -25,6 +27,7 @@ const paymentConfig: Record<PaymentStatus, { label: string; variant: "success" |
   pending: { label: "Pending", variant: "warning" },
   failed: { label: "Failed", variant: "danger" },
   refunded: { label: "Refunded", variant: "info" },
+  cancelled: { label: "Cancelled", variant: "default" },
 };
 
 const bookingConfig: Record<BookingStatus, { label: string; variant: "success" | "warning" | "danger" | "info" | "default" }> = {

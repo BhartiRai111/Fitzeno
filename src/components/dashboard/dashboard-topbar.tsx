@@ -42,6 +42,8 @@ interface DashboardTopbarProps {
   userInitials: string;
   notifications: NotificationItem[];
   searchPlaceholder?: string;
+  /** Calls the real backend logout when provided; falls back to a plain link to /login otherwise. */
+  onLogout?: () => void;
 }
 
 function isActive(pathname: string, href: string) {
@@ -68,6 +70,7 @@ export function DashboardTopbar({
   userInitials,
   notifications,
   searchPlaceholder = "Search...",
+  onLogout,
 }: DashboardTopbarProps) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -186,12 +189,19 @@ export function DashboardTopbar({
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" asChild>
-              <Link href="/login">
+            {onLogout ? (
+              <DropdownMenuItem variant="destructive" onSelect={() => onLogout()}>
                 <LogOut />
                 Log out
-              </Link>
-            </DropdownMenuItem>
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem variant="destructive" asChild>
+                <Link href="/login">
+                  <LogOut />
+                  Log out
+                </Link>
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
