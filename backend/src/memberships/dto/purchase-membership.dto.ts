@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { PaymentMethod } from '../../generated/prisma/enums.js';
 
 /** The member-portal self-service action — always "purchase or renew, whichever applies" (see MembershipsService.purchaseOrRenewForSelf). */
 export class PurchaseMembershipDto {
@@ -7,11 +8,10 @@ export class PurchaseMembershipDto {
   @IsUUID()
   planId!: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: PaymentMethod })
   @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  paymentMethod?: string;
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 
   @ApiPropertyOptional()
   @IsOptional()

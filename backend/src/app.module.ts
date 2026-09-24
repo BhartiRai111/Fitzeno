@@ -27,6 +27,7 @@ import { ClassBookingsModule } from './class-bookings/class-bookings.module.js';
 import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
 import { MembershipPlansModule } from './membership-plans/membership-plans.module.js';
 import { MembershipsModule } from './memberships/memberships.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { MembershipsModule } from './memberships/memberships.module.js';
     PtSessionsModule,
     MembershipPlansModule,
     MembershipsModule,
+    PaymentsModule,
     HealthModule,
   ],
   providers: [

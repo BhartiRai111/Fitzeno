@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { PaymentMethod } from '../../generated/prisma/enums.js';
 
 export class CreateMembershipDto {
   @ApiProperty()
@@ -15,11 +16,10 @@ export class CreateMembershipDto {
   @IsDateString()
   startDate?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: PaymentMethod })
   @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  paymentMethod?: string;
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 
   @ApiPropertyOptional()
   @IsOptional()

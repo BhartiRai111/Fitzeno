@@ -38,7 +38,7 @@ export class MembershipsController {
   @RequirePermission(PermissionArea.MEMBERSHIPS, PermissionLevel.MANAGE)
   @ApiOperation({ summary: 'Assign a new membership to a member.', description: 'Rejects if the member already holds a current (active/pending/frozen) membership — renew that instead.' })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateMembershipDto) {
-    return this.membershipsService.create(user.tenantId, dto);
+    return this.membershipsService.create(user.tenantId, dto, user.id);
   }
 
   @Get('stats')
@@ -93,7 +93,7 @@ export class MembershipsController {
   @RequirePermission(PermissionArea.MEMBERSHIPS, PermissionLevel.MANAGE)
   @ApiOperation({ summary: 'Renew a membership — a new period, optionally on a different plan.' })
   renew(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: RenewMembershipDto) {
-    return this.membershipsService.renew(user.tenantId, id, dto);
+    return this.membershipsService.renew(user.tenantId, id, dto, user.id);
   }
 
   @Post(':id/freeze')

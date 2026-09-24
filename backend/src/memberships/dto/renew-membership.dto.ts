@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { PaymentMethod } from '../../generated/prisma/enums.js';
 
 export class RenewMembershipDto {
   @ApiPropertyOptional({ description: 'Renew onto a different ACTIVE plan (a "switch"). Omit to renew onto the same plan.' })
@@ -7,11 +8,10 @@ export class RenewMembershipDto {
   @IsUUID()
   planId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: PaymentMethod })
   @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  paymentMethod?: string;
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -2,8 +2,9 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MembersService } from '../members/members.service.js';
 import { MembershipPlansService } from '../membership-plans/membership-plans.service.js';
+import { TransactionsService } from '../payments/transactions.service.js';
 import { runSerializableTransaction } from '../common/utils/serializable-transaction.util.js';
-import { BillingPeriod, MembershipRecordStatus } from '../generated/prisma/enums.js';
+import { BillingPeriod, MembershipRecordStatus, PaymentMethod, TransactionStatus, TransactionType } from '../generated/prisma/enums.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PaginatedResult } from '../common/dto/pagination-query.dto.js';
 import {
@@ -64,7 +65,17 @@ export class MembershipsService {
     private readonly prisma: PrismaService,
     private readonly membersService: MembersService,
     private readonly membershipPlansService: MembershipPlansService,
+    private readonly transactionsService: TransactionsService,
   ) {}
+
+  /**
+   * PENDING for a bank transfer (awaiting clearance), PAID immediately for
+   * everything else — mirrors the approved frontend's own
+   * MembershipProvider.purchaseMembership branching exactly.
+   */
+  private initialTransactionStatus(method: PaymentMethod): TransactionStatus {
+    return method === PaymentMethod.BANK_TRANSFER ? TransactionStatus.PENDING : TransactionStatus.PAID;
+  }
 
   // ---------------------------------------------------------------------
   // Reads
@@ -184,7 +195,7 @@ export class MembershipsService {
   // Writes
   // ---------------------------------------------------------------------
 
-  async create(tenantId: string, dto: CreateMembershipDto): Promise<MembershipResponseDto> {
+  async create(tenantId: string, dto: CreateMembershipDto, recordedByUserId?: string): Promise<MembershipResponseDto> {
     return runSerializableTransaction(this.prisma, async (tx) => {
       await this.membersService.getMemberInTenant(tenantId, dto.memberId);
       const plan = await this.membershipPlansService.getActivePlanOrThrow(tenantId, dto.planId);
@@ -209,6 +220,26 @@ export class MembershipsService {
         },
         include: membershipInclude,
       });
+
+      // A payment method means "yes, bill this" — a staff-created
+      // membership with none is a deliberate comp/administrative
+      // enrollment with no financial record, not an oversight. See the
+      // Payments module's own README notes on this integration boundary:
+      // Memberships stays responsible for membership state, Payments for
+      // financial state — this is the one call that connects them.
+      if (dto.paymentMethod) {
+        await this.transactionsService.recordWithinTransaction(tx, tenantId, {
+          memberId: dto.memberId,
+          type: TransactionType.MEMBERSHIP_PURCHASE,
+          description: `${plan.name} plan — purchase`,
+          amount: Number(plan.price),
+          method: dto.paymentMethod,
+          status: this.initialTransactionStatus(dto.paymentMethod),
+          relatedMembershipId: membership.id,
+          recordedByUserId,
+        });
+      }
+
       return toMembershipResponse(membership, todayUtc());
     });
   }
@@ -233,16 +264,25 @@ export class MembershipsService {
     // renewInternal's date math), exactly matching the frontend's own
     // "renew" vs. "purchase" being one unified action either way.
     if (current && current.status !== 'CANCELLED') {
-      return this.renewInternal(tenantId, current.id, dto);
+      return this.renewInternal(tenantId, current.id, dto, userId);
     }
-    return this.create(tenantId, { memberId, planId: dto.planId, paymentMethod: dto.paymentMethod, paymentReference: dto.paymentReference });
+    return this.create(
+      tenantId,
+      { memberId, planId: dto.planId, paymentMethod: dto.paymentMethod, paymentReference: dto.paymentReference },
+      userId,
+    );
   }
 
-  async renew(tenantId: string, id: string, dto: RenewMembershipDto): Promise<MembershipResponseDto> {
-    return this.renewInternal(tenantId, id, dto);
+  async renew(tenantId: string, id: string, dto: RenewMembershipDto, recordedByUserId?: string): Promise<MembershipResponseDto> {
+    return this.renewInternal(tenantId, id, dto, recordedByUserId);
   }
 
-  private async renewInternal(tenantId: string, currentId: string, dto: RenewMembershipDto): Promise<MembershipResponseDto> {
+  private async renewInternal(
+    tenantId: string,
+    currentId: string,
+    dto: RenewMembershipDto,
+    recordedByUserId?: string,
+  ): Promise<MembershipResponseDto> {
     return runSerializableTransaction(this.prisma, async (tx) => {
       const current = await tx.memberMembership.findFirst({ where: { id: currentId, tenantId } });
       if (!current) {
@@ -283,6 +323,22 @@ export class MembershipsService {
         },
         include: membershipInclude,
       });
+
+      // See create()'s own comment: no payment method means a deliberate
+      // comp/administrative renewal, not a missed financial record.
+      if (dto.paymentMethod) {
+        await this.transactionsService.recordWithinTransaction(tx, tenantId, {
+          memberId: current.memberId,
+          type: TransactionType.MEMBERSHIP_RENEWAL,
+          description: `${plan.name} plan — renewal`,
+          amount: Number(plan.price),
+          method: dto.paymentMethod,
+          status: this.initialTransactionStatus(dto.paymentMethod),
+          relatedMembershipId: membership.id,
+          recordedByUserId,
+        });
+      }
+
       return toMembershipResponse(membership, today);
     });
   }

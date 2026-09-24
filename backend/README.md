@@ -852,6 +852,195 @@ has a clean place to hook in later, the same reasoning
 `MembersService`/`LeadsService` already documented for their own
 single-purpose methods — nothing emits an event or sends anything today.
 
+### Payments, Billing, Transactions, Invoices & Refunds
+
+The full financial lifecycle: *Charge → Payment Attempt/Result →
+Transaction → Invoice → Payment History*, and *Paid → Refund Request →
+Refund → Updated Transaction State*. One new module (`payments/`), three
+new tables (`Transaction`, `Invoice`, `Refund`) plus a small
+`InvoiceCounter` support table, wired into `MembershipsModule` so a
+membership purchase/renewal can produce a real financial record without
+Memberships owning any payment logic itself.
+
+**One reusable `Transaction` model for every kind of charge, not one
+table per module.** The task this phase started from lists membership
+purchase/renewal, PT, class/session payment, store/POS sale, and "other
+charges" as *examples* of things that need billing — the wrong move would
+be a `MembershipPayment` table, a future `PtPayment` table, a future
+`StoreSale.paymentStatus`, etc., each re-inventing status/method/refund
+logic slightly differently. Instead every module that ever needs to
+charge a member goes through one place — `TransactionsService.record()` —
+via a `TransactionType` enum (`MEMBERSHIP_PURCHASE`, `MEMBERSHIP_RENEWAL`,
+`PERSONAL_TRAINING`, `CLASS_SESSION`, `STORE_SALE`, `OTHER`) that
+describes *what* was paid for, plus three nullable FK columns
+(`relatedMembershipId`/`relatedPtSessionId`/`relatedClassBookingId`) that
+link back to *which* record — the same "one nullable FK per relation
+type" shape `ClassOccurrence`/`ClassBooking` already established, chosen
+over a generic polymorphic `(type, id)` pair so each relation stays a real,
+indexable, referentially-checked foreign key. Only `MEMBERSHIP_PURCHASE`/
+`MEMBERSHIP_RENEWAL` are wired to an actual call site this phase (from
+`MembershipsService`) — `PERSONAL_TRAINING`/`CLASS_SESSION`/`STORE_SALE`
+exist in the schema and enum today specifically so a later PT/Class/Store
+payment phase has a place to plug into without touching this model again.
+
+**Charge vs. payment attempt vs. invoice — deliberately not three
+separate tables.** The task explicitly asked for this distinction to be
+thought through rather than collapsed by default. In *this* product,
+every charge the approved frontend ever creates is requested and settled
+(or declined) in the same instant — `RecordPaymentDialog` always creates
+`status: 'paid'` immediately; there is no UI flow that separates "open a
+pending charge" from "attempt payment against it" as two actions minutes
+or days apart the way a real subscription-billing system's dunning flow
+might. So `Transaction` is both the charge *and* the payment
+attempt/result in one row — adding a separate `Charge`/`Order` entity
+today would be a table with no distinct lifecycle of its own. `Invoice`,
+by contrast, genuinely is a separate concern — a billing *document*
+(line items, subtotal, discount, tax, total, issue/due dates) with its
+own numbering scheme — so it stays its own 1:1 table rather than being
+collapsed into `Transaction`, satisfying the other half of the same
+instruction ("avoid collapsing everything into one table if that creates
+poor domain boundaries"). Crucially, `Invoice` stores **no `status`
+column of its own** — an invoice's payment status is always read live
+from `transaction.status` (see `InvoiceResponseDto`/`toInvoiceResponse`),
+because a stored copy would be a second source of truth that drifts the
+moment the transaction transitions (paid → refunded, etc.) without the
+invoice being separately updated. `Refund` is its own table for the
+opposite reason: a single transaction can have *multiple* partial
+refunds against it, which a status enum on `Transaction` alone can't
+represent — only their sum can.
+
+**Every transaction gets an invoice automatically, including a pending
+or failed one.** `TransactionsService.record()`/`recordWithinTransaction()`
+is the *one* place a `Transaction` is ever created, and it always calls
+`InvoicesService.createForTransaction()` in the same database transaction
+— there is no separate "create an invoice" endpoint or button anywhere in
+the approved frontend (`InvoiceDialog` is read-only, its "Download PDF"
+button a toast-only stub), so invoices are never manually authored, only
+generated as a byproduct of recording a charge. This matches the task's
+own instruction to handle invoice numbering "consistently/safely — NOT
+random frontend-generated IDs": a dedicated per-tenant `InvoiceCounter`
+row is atomically incremented (`upsert` with `{lastNumber:
+{increment: 1}}`) inside the *same* transaction as the invoice's creation,
+producing sequential, gap-free-under-normal-operation `INV-000001`-style
+numbers with no separate check-then-write race to get wrong.
+
+**Money is `Decimal`, never `number`, anywhere it's computed.** Every
+monetary column (`Transaction.amount`, `Invoice.subtotal`/
+`discountAmount`/`taxAmount`/`totalAmount`, `Refund.amount`) is a Prisma
+`Decimal(10, 2)`, and the one place floating-point error could actually
+cause a financial bug — validating a refund amount against what's already
+been refunded — uses `Prisma.Decimal`'s own arithmetic
+(`.plus()`/`.minus()`/`.lessThanOrEqualTo()`/`.greaterThan()`) throughout
+`TransactionsService.refund()`, never plain `+`/`-` on floats. Rows are
+only ever converted to plain `number` at the very last step, inside each
+DTO's `to...Response()` mapper, for JSON serialization — nothing upstream
+of that boundary does math on a converted value.
+
+**Payment states are a realistic, linear lifecycle, not a free-form
+string.** `TransactionStatus` is `PENDING` → (`PROCESSING`, reserved for
+a future payment-gateway phase — nothing sets it yet) → `PAID` | `FAILED`
+| `CANCELLED`, and separately `PAID` → `PARTIALLY_REFUNDED` → `REFUNDED`
+once refunds are issued against it. A brand-new transaction may only ever
+be recorded as `PENDING` or `PAID` (enforced at runtime in
+`recordWithinTransaction`, since Prisma's generated `TransactionStatus` is
+a string-literal union, not a real TS enum, so this can't be a compile-time
+check) — nothing can be born `FAILED`/`CANCELLED`/`REFUNDED`. Every
+other transition goes through a single guarded `updateMany` keyed on the
+*current* status (`transitionFromPending`) — e.g. `markPaid` only
+succeeds against a row still `PENDING`/`PROCESSING` — so two staff members
+racing to confirm/fail the same pending payment can't both "win", without
+needing full Serializable isolation for a single-row transition.
+`REFUNDED`/`PARTIALLY_REFUNDED` are never set directly by a caller; they're
+always derived inside `refund()` itself from summing completed refunds
+against the transaction's own amount.
+
+**Idempotency for the one truly retryable operation.**
+`Transaction.idempotencyKey` is an optional, per-tenant-unique
+(`@@unique([tenantId, idempotencyKey])`) client-supplied string on
+`CreateTransactionDto` — a client retrying a request it's not sure
+succeeded (a flaky network call after tapping "Record payment") replays
+the same key and gets the *original* transaction back instead of creating
+a duplicate charge, checked at the very top of `recordWithinTransaction`
+before any row is written. This is the concrete answer to the task's
+"avoid accidental duplicate transactions" requirement — no other write in
+this module is retryable in a way that could double-charge, so no other
+idempotency key exists.
+
+**Refunds prevent every invalid scenario the task named.** Full or
+partial, `TransactionsService.refund()` runs inside the same
+`runSerializableTransaction` helper the rest of this codebase's
+check-then-insert races already use (class capacity, membership overlap):
+it sums existing `COMPLETED` refunds, computes what's actually still
+refundable, and rejects (`BadRequestException`) a request that's zero,
+negative, or exceeds that remaining amount — including a *second* partial
+refund racing against a *first* one for the same transaction, which
+Serializable isolation catches and retries rather than allowing both to
+under-validate against a stale read. Refunding a transaction that isn't
+currently `PAID`/`PARTIALLY_REFUNDED` (e.g. still `PENDING`, or already
+fully `REFUNDED`) is rejected outright. `Refund.status` starts and, this
+phase, always ends `COMPLETED` — there's no real payment-gateway refund
+call to fail against yet, but `RefundStatus.FAILED` exists in the schema
+for when one does.
+
+**Membership payment linkage keeps the two domains' responsibilities
+separate, per the task's own instruction.** `MembershipsService.create()`/
+`renewInternal()` conditionally call
+`TransactionsService.recordWithinTransaction()` — *within the transaction
+Memberships already holds open*, never `record()` itself, since Prisma has
+no nested-transaction support (a service method that opens its own
+`$transaction` can never be called from inside another already-open one;
+see `TransactionsService`'s own doc comment for this split) — so a
+membership row and its purchase/renewal transaction either both commit or
+both roll back together. A `paymentMethod` on the create/renew/purchase
+DTO is the trigger: present, it charges the member (`MEMBERSHIP_PURCHASE`
+or `MEMBERSHIP_RENEWAL`, always `PAID` immediately, matching every other
+manually-recorded payment in this phase); omitted, it's treated as a
+deliberate comp/administrative enrollment with **no** financial record at
+all — not every membership assignment is a sale. Refunding or cancelling
+a `Transaction` deliberately does **not** reach back and mutate
+`MemberMembership` state (no auto-freeze/cancel on refund) — membership
+domain owns membership state, payment domain owns financial state, and
+crossing that boundary automatically was judged out of scope for this
+phase; see Known limitations.
+
+**Search, filtering, and reporting-readiness.** `GET /transactions`
+filters by member, status, type, method, an inclusive `[dateFrom,
+dateTo]` window, and an `[amountMin, amountMax]` range, plus a
+member-name search — the same pagination/sort shape every other list
+endpoint in this backend uses. `GET /transactions/stats` (and the
+per-member/per-invoice/per-refund list endpoints) exist specifically as a
+**data source** for a future Reports module, not a reimplementation of
+one: total revenue, paid count, pending amount, failed count, refunded
+amount, and revenue broken down by type and by method, all computed with
+Prisma aggregates/`groupBy` rather than loading rows into memory, and
+matching the approved frontend's own convention that only `PAID`
+transactions ever count as revenue.
+
+**Authorization** reuses the existing `PAYMENTS` `PermissionArea`
+unchanged (OWNER/MANAGER/FRONT_DESK `MANAGE`, TRAINER `NONE` — "trainers
+should not automatically access sensitive financial administration",
+exactly as the task specified) for every staff read/write. A `MEMBER`
+never touches a `PermissionArea` at all; their own payment
+history/invoices are served over separate, permission-gate-free `/me` and
+`/me/:id` routes (`GET /transactions/me`, `GET /invoices/me`, ...) — the
+same precedent as `/members/me`/`/memberships/me` — while attempting to
+read *another* member's transaction/invoice by id through those routes is
+a `403` (a real row, in-tenant, just not theirs), matching the
+Members/Leads-established `403`-within-tenant vs. `404`-cross-tenant
+split. Refunds are staff-only; there's no member-facing "request a
+refund" action in the approved frontend, only an owner-side "Refund"
+button.
+
+**No real payment gateway this phase, but the seams for one are
+already in place.** `PaymentMethod` includes `ONLINE` as a placeholder for
+a future gateway integration; `TransactionStatus.PROCESSING` and
+`RefundStatus.FAILED` exist and are schema-ready but unused by any code
+path yet; `idempotencyKey` is exactly the mechanism a real gateway
+webhook/retry flow would also need. None of this required inventing new
+infrastructure (no webhook endpoint, no provider SDK, no secrets) —
+just enum values and a nullable key that a later phase can start actually
+setting without another migration reshaping this model.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -909,31 +1098,39 @@ availability), **Classes/Scheduling** (recurring class templates + lazily
 generated dated occurrences, trainer-conflict prevention), **Class
 Bookings/Waitlist** (capacity-aware booking with FIFO waitlist promotion,
 concurrency-safe under simultaneous requests), **Personal Training**
-(available-slot computation, booking, rescheduling, cancellation), and now
+(available-slot computation, booking, rescheduling, cancellation),
 **Membership Plans** (create/update/archive/activate) and **Member
 Memberships** (creation, date-derived lifecycle, renewal with plan
 switching, freeze/unfreeze, cancellation, full per-member history via a
-renewal chain, concurrency-safe under simultaneous renewal/create) — see
-the sections above for the full model.
+renewal chain, concurrency-safe under simultaneous renewal/create), and
+now **Payments/Billing** (one reusable `Transaction` model for every
+charge type), **Invoices** (auto-generated 1:1 alongside every
+transaction, safe sequential numbering, owner search + member
+self-access), and **Refunds** (full/partial, concurrency-safe validation
+against what's actually still refundable) — see the sections above for
+the full model.
 
-**Not here, by design**: payment processing itself (`MemberMembership`
-carries only forward-compatible `paymentMethod`/`paymentReference`
-reference fields, not a real Payment/invoice entity — see the Memberships
-section above), Attendance (booking statuses `ATTENDED`/`NO_SHOW` exist on
-`ClassBooking`/`PersonalTrainingSession` as schema groundwork, but nothing
-sets them yet — see the Trainers/Classes/Bookings section above; class/PT
-booking eligibility still uses `Member.status === ACTIVE` rather than the
-new real membership data, since wiring that check is booking-module work
-out of this phase's scope), Invoices, Notifications
+**Not here, by design**: a real payment gateway (Razorpay/Stripe/etc — see
+the Payments section above for the placeholder seams already in place: no
+provider SDK, webhook endpoint, or secret exists yet), Attendance (booking
+statuses `ATTENDED`/`NO_SHOW` exist on `ClassBooking`/
+`PersonalTrainingSession` as schema groundwork, but nothing sets them yet
+— see the Trainers/Classes/Bookings section above; class/PT booking
+eligibility still uses `Member.status === ACTIVE` rather than the new real
+membership data, since wiring that check is booking-module work out of
+this phase's scope), Notifications
 (membership-created/nearing-expiry/renewed/expired and
 booking-confirmed/cancelled/class-changed/waitlist-promotion are all real
 state transitions in the services above, ready for a future notifications
-module to hook into, but nothing sends anything today), Reports (`GET
-/memberships/stats` exists as a first data source a future Reports module
-can consume, not a Reports module itself), Inventory/POS, Expenses,
-Audit/Activity, and any platform-level admin surface (the
-`TenantStatus.SUSPENDED` state and its enforcement exist, but nothing can
-set it yet). Every one of these is a real business domain the frontend
+module to hook into, but nothing sends anything today), the full Reports
+module (`GET /transactions/stats` and `GET /memberships/stats` exist as
+data sources a future Reports module can consume, not a Reports module
+itself), Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
+`Transaction.relatedClassBookingId`'s sibling relation columns exist as
+schema groundwork only), Expenses, Audit/Activity, and any platform-level
+admin surface (the `TenantStatus.SUSPENDED` state and its enforcement
+exist, but nothing can set it yet). Every one of these is a real business
+domain the frontend
 already has mock data and full UI for (see `../src/lib/data/*.ts` and
 `../README.md`'s project structure section), and each becomes its own
 Nest module in a later phase, built on this foundation — each carrying its
@@ -1006,6 +1203,28 @@ duplicating any of them.
   as `UsersService.list()` — fine at today's scale, but not a real
   full-text index; worth a `pg_trgm` index (or equivalent) once a gym's
   member count makes it worth measuring.
+- No real payment gateway is integrated — every transaction this phase is
+  either staff-recorded (always immediately `PAID`) or membership-triggered;
+  `PaymentMethod.ONLINE`, `TransactionStatus.PROCESSING`, and
+  `RefundStatus.FAILED` are schema-ready placeholders with no code path that
+  sets them yet. Adding a real provider means a webhook endpoint,
+  provider-specific secrets/config, and wiring `idempotencyKey` into that
+  flow — deliberately none of which exists yet (see the Payments section
+  above).
+- Refunding or cancelling a `Transaction` does not reach back and mutate
+  `MemberMembership` state (no auto-freeze/cancel on refund) — a deliberate
+  separation-of-concerns decision (membership domain owns membership state,
+  payment domain owns financial state) rather than an oversight; revisit if
+  the product later wants "refund a membership payment" to also
+  freeze/cancel the membership itself.
+- PT/Class-session/Store-sale payments are schema-ready
+  (`TransactionType.PERSONAL_TRAINING`/`CLASS_SESSION`/`STORE_SALE`,
+  `Transaction.relatedPtSessionId`/`relatedClassBookingId`) but no call site
+  creates them yet — only Membership purchase/renewal is wired into
+  `TransactionsService` this phase, per the task's explicit scope.
+- Invoices have no PDF generation — matching the approved frontend's own
+  `InvoiceDialog`, whose "Download PDF" button is a toast-only stub with no
+  server-side document behind it.
 - No dedicated audit/activity log yet — `MembersService`/`LeadsService`
   keep each meaningful action (create, status change, conversion, note) in
   its own single-purpose method specifically so a future notifications or

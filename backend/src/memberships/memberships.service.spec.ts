@@ -4,6 +4,7 @@ import { MembershipsService } from './memberships.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { MembersService } from '../members/members.service.js';
 import type { MembershipPlansService } from '../membership-plans/membership-plans.service.js';
+import type { TransactionsService } from '../payments/transactions.service.js';
 
 const TODAY = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
 
@@ -48,6 +49,7 @@ describe('MembershipsService', () => {
   let prisma: PrismaService;
   let membersService: MembersService;
   let membershipPlansService: MembershipPlansService;
+  let transactionsService: TransactionsService;
   let service: MembershipsService;
 
   beforeEach(() => {
@@ -74,7 +76,11 @@ describe('MembershipsService', () => {
       getActivePlanOrThrow: vi.fn().mockResolvedValue(makePlan()),
     } as unknown as MembershipPlansService;
 
-    service = new MembershipsService(prisma, membersService, membershipPlansService);
+    transactionsService = {
+      recordWithinTransaction: vi.fn().mockResolvedValue({ id: 'txn-1' }),
+    } as unknown as TransactionsService;
+
+    service = new MembershipsService(prisma, membersService, membershipPlansService, transactionsService);
   });
 
   describe('create', () => {
