@@ -2,9 +2,10 @@ node_modules
 dist
 coverage
 
-# Keep environment variables out of version control. The root .gitignore's
-# broad `.env*` rule also catches .env.example, so un-ignore that one
-# explicitly — it's a template with no real secrets, meant to be committed.
+# TypeScript incremental build cache (tsconfig.json has "incremental": true).
+*.tsbuildinfo
+
+# Keep environment variables out of version control, but not the template.
 .env
 !.env.example
 
