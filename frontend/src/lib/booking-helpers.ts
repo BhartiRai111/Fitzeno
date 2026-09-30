@@ -43,8 +43,9 @@ export function getNextOccurrenceDate(day: GymClass["day"], fromISO: string = TO
   return result.toISOString().slice(0, 10);
 }
 
-export function formatOccurrence(day: GymClass["day"], fromISO: string = TODAY): string {
-  const iso = getNextOccurrenceDate(day, fromISO);
+/** `explicitDate` (a real occurrence's actual calendar date) takes priority over deriving "next such weekday" from `day` — the derivation is only a stand-in for classes/PT that don't carry a real date. */
+export function formatOccurrence(day: GymClass["day"], fromISO: string = TODAY, explicitDate?: string): string {
+  const iso = explicitDate ?? getNextOccurrenceDate(day, fromISO);
   return new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", {
     weekday: "short",
     day: "numeric",

@@ -10,7 +10,7 @@ import { trainers } from "@/lib/data/trainers";
 import { formatOccurrence } from "@/lib/booking-helpers";
 import type { GymClass } from "@/lib/data/types";
 
-const typeColor: Record<GymClass["type"], "primary" | "success" | "warning" | "info" | "default" | "danger"> = {
+const typeColor: Record<string, "primary" | "success" | "warning" | "info" | "default" | "danger"> = {
   HIIT: "warning",
   Yoga: "info",
   Strength: "primary",
@@ -36,7 +36,7 @@ export function PortalClassCard({ gymClass, onOpen }: PortalClassCardProps) {
     <Card className="flex flex-col p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <Badge variant={typeColor[live.type]}>{live.type}</Badge>
+          <Badge variant={typeColor[live.type] ?? "default"}>{live.type}</Badge>
           <h3 className="mt-2 font-display text-base font-semibold text-foreground">{live.name}</h3>
           <p className="text-sm text-muted-foreground">with {trainer?.name}</p>
         </div>
@@ -44,7 +44,7 @@ export function PortalClassCard({ gymClass, onOpen }: PortalClassCardProps) {
       <div className="mt-3 space-y-1.5 text-sm text-muted-foreground">
         <div className="flex items-center gap-2">
           <Clock className="size-4" />
-          {formatOccurrence(live.day)} · {live.startTime} · {live.duration} min
+          {formatOccurrence(live.day, undefined, live.date)} · {live.startTime} · {live.duration} min
         </div>
         <div className="flex items-center gap-2">
           <MapPin className="size-4" />

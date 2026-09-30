@@ -15,7 +15,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBookings } from "@/components/portal/bookings-provider";
 import { useMembership } from "@/components/portal/membership-provider";
 import { trainers } from "@/lib/data/trainers";
-import { DEMO_MEMBER_ID, formatOccurrence, getMemberScheduleConflicts } from "@/lib/booking-helpers";
+import { formatOccurrence } from "@/lib/booking-helpers";
 import type { GymClass } from "@/lib/data/types";
 
 interface ClassDetailSheetProps {
@@ -26,10 +26,11 @@ interface ClassDetailSheetProps {
 
 export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSheetProps) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
-  const { classes, bookings, myPtSessions, getStatusForClass, getWaitlistPosition, bookClass, cancelClassBooking } =
+  const { classes, myClassBookings, getStatusForClass, getWaitlistPosition, bookClass, cancelClassBooking } =
     useBookings();
   const { membershipBlock } = useMembership();
   const [justBooked, setJustBooked] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
 
   React.useEffect(() => {
     // Intentional: reset the success view each time this sheet is reopened for a class.
@@ -51,12 +52,7 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
   const status = getStatusForClass(live.id);
   const waitlistPosition = status === "waitlisted" ? getWaitlistPosition(live.id) : null;
   const isFull = live.booked >= live.capacity;
-  const myBooking = bookings.find(
-    (b) => b.memberId === DEMO_MEMBER_ID && b.classId === live.id && (b.status === "booked" || b.status === "waitlisted")
-  );
-  const conflicts = !status
-    ? getMemberScheduleConflicts(classes, bookings, myPtSessions, DEMO_MEMBER_ID, live.day, live.startTime, live.duration)
-    : [];
+  const myBooking = myClassBookings.find((v) => v.gymClass.id === live.id && (v.booking.status === "booked" || v.booking.status === "waitlisted"))?.booking;
 
   if (justBooked) {
     return (
@@ -70,7 +66,7 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
               {isFull ? "You're on the waitlist" : "You're booked!"}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {live.name} · {formatOccurrence(live.day)} · {live.startTime}
+              {live.name} · {formatOccurrence(live.day, undefined, live.date)} · {live.startTime}
             </p>
           </div>
           <div className="flex w-full flex-col gap-2 sm:flex-row">
@@ -116,7 +112,7 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
         <div className="space-y-2 text-sm text-muted-foreground">
           <div className="flex items-center gap-2.5">
             <Clock className="size-4 shrink-0" />
-            {formatOccurrence(live.day)} · {live.startTime} · {live.duration} min
+            {formatOccurrence(live.day, undefined, live.date)} · {live.startTime} · {live.duration} min
           </div>
           <div className="flex items-center gap-2.5">
             <MapPin className="size-4 shrink-0" />
@@ -140,13 +136,6 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
           </div>
         )}
 
-        {conflicts.length > 0 && (
-          <div className="flex items-start gap-2.5 rounded-md bg-danger-tint px-3 py-2.5 text-sm text-danger">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <span>This overlaps {conflicts.map((c) => c.label).join(", ")} already on your schedule.</span>
-          </div>
-        )}
-
         {!status && membershipBlock && (
           <div className="flex items-start gap-2.5 rounded-md bg-danger-tint px-3 py-2.5 text-sm text-danger">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
@@ -166,16 +155,26 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
           <Button
             variant="outline"
             className="w-full"
-            onClick={() => myBooking && cancelClassBooking(myBooking.id)}
+            loading={submitting}
+            onClick={async () => {
+              if (!myBooking) return;
+              setSubmitting(true);
+              await cancelClassBooking(myBooking.id);
+              setSubmitting(false);
+            }}
           >
             {status === "waitlisted" ? "Leave Waitlist" : "Cancel Booking"}
           </Button>
         ) : (
           <Button
             className="w-full"
-            disabled={conflicts.length > 0 || !!membershipBlock}
-            onClick={() => {
-              if (bookClass(live.id)) setJustBooked(true);
+            loading={submitting}
+            disabled={!!membershipBlock}
+            onClick={async () => {
+              setSubmitting(true);
+              const booked = await bookClass(live.id);
+              setSubmitting(false);
+              if (booked) setJustBooked(true);
             }}
           >
             {isFull ? "Join Waitlist" : "Book Class"}
