@@ -8,6 +8,7 @@ import { MembersService } from '../members/members.service.js';
 import { ClassBookingsService } from './class-bookings.service.js';
 import { CreateClassBookingDto, CreateClassBookingForMemberDto } from './dto/create-class-booking.dto.js';
 import { ListClassBookingsQueryDto } from './dto/list-class-bookings-query.dto.js';
+import { MarkAttendanceDto } from './dto/mark-attendance.dto.js';
 
 @ApiTags('class-bookings')
 @ApiBearerAuth()
@@ -72,5 +73,15 @@ export class ClassBookingsController {
   @ApiOperation({ summary: 'Manually promote a specific waitlisted booking to confirmed, skipping FIFO order.' })
   promote(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.classBookingsService.promote(user.tenantId, id);
+  }
+
+  @Post(':id/attendance')
+  @RequirePermission(PermissionArea.ATTENDANCE, PermissionLevel.MANAGE)
+  @ApiOperation({
+    summary: "Record (or correct) a class booking's attendance outcome.",
+    description: 'A TRAINER can only mark attendance for classes they teach.',
+  })
+  markAttendance(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: MarkAttendanceDto) {
+    return this.classBookingsService.markAttendance(user.tenantId, id, dto.status, { id: user.id, role: user.role });
   }
 }

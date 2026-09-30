@@ -1217,6 +1217,116 @@ Adding email/SMS/push later means a new listener (or a new branch inside
 the existing one) that reads the same `Notification` row and calls a
 provider — the domain model itself doesn't need to change.
 
+### Attendance & Check-in
+
+Two attendance concepts, kept deliberately separate rather than one
+catch-all table — mirroring the approved frontend's own split between the
+Attendance/Check-in pages and the Trainer's per-class roster page:
+
+- **General gym check-in** (`CheckIn`, a new `attendance/` module) — a
+  member walked in the door, independent of any class/PT booking.
+- **Class/PT attendance** — not a second `CheckIn`-shaped row. `ATTENDED`/
+  `NO_SHOW` (and PT's `COMPLETED`/`NO_SHOW`) already existed as unused enum
+  values on `ClassBooking`/`PersonalTrainingSession` from the Trainers/
+  Classes/Bookings phase (schema groundwork laid in advance); this phase is
+  the first to actually set them, via a new `markAttendance` method added
+  directly to the existing `ClassBookingsService`/`PtSessionsService` (and
+  a `POST /class-bookings/:id/attendance` / `POST /pt-sessions/:id/attendance`
+  endpoint on each existing controller) rather than a parallel table —
+  "booked" and "attended" are two *states* of one row, not two rows, which
+  is what keeps this a single source of truth.
+
+**Check-in eligibility is real, not a stand-in.** Every check-in path
+(self, front-desk manual/kiosk, QR token redemption) funnels through one
+`AttendanceService.performCheckIn`, which re-checks, fresh, on every call:
+`Member.status === ACTIVE` first (an owner can deactivate someone for
+reasons unrelated to billing), then the member's actual current membership
+period via `MembershipsService.getCurrentForMember` — the same
+`effectiveStatus` (`PENDING`/`ACTIVE`/`EXPIRED`/`FROZEN`/`CANCELLED`) the
+Memberships phase already computes, now backing a real check-in decision
+instead of the approved frontend's mock `getMembershipBlock`. A denial
+(`MEMBERSHIP_EXPIRED`/`MEMBERSHIP_FROZEN`/`MEMBERSHIP_CANCELLED`/
+`NO_MEMBERSHIP`/`MEMBER_INACTIVE`) is a normal `200`/`201` **business
+outcome** (`CheckInAttemptResponseDto { outcome, denialReason, message,
+checkIn }`), not an HTTP error — the caller (member's own app, or the
+front desk) always gets a real member and a clear reason back. A missing
+or cross-tenant member id is still a genuine `404`/`400`, since there's no
+legitimate member context to report a business outcome for.
+
+**A member can't hold two open visits at once — enforced in the service,
+not a database constraint.** `performCheckIn` looks for an existing
+`checkIn` row with `checkOutAt: null` for that member before creating a
+new one; if found, it returns `ALREADY_CHECKED_IN` with the existing row
+rather than inserting a duplicate. This mirrors this schema's established
+precedent (e.g. `ClassBooking`'s waitlist-promotion ordering) of putting a
+business-rule invariant in the service layer rather than reaching for an
+exotic partial-unique index Prisma doesn't support cleanly.
+
+**The QR check-in foundation is a real, working mechanism — not just
+schema.** `GET /attendance/check-in/token` (member, self) issues an
+opaque, high-entropy token via the existing `TokenService.generateOpaqueToken`
+(the same primitive `PasswordResetToken`/`RefreshToken` already use); only
+its SHA-256 hash (`CheckInToken.tokenHash`) is ever persisted — the raw
+value exists only in the response, to be encoded as a QR code, and briefly
+in the member's client. It expires in
+`AttendanceService.CHECK_IN_TOKEN_TTL_SECONDS` (45s). A staff-operated
+reader (`POST /attendance/check-in/redeem`) hashes the presented token,
+looks it up, and rejects a missing token, one issued for a different
+tenant, an expired one, or an already-consumed one — each a plain `400`,
+deliberately with no distinction in status code between "doesn't exist"
+and "wrong gym" (never confirm a foreign-tenant token is real). Consuming
+a token uses a conditional `updateMany({ where: { id, consumedAt: null } })`
+rather than a plain `update`, so two simultaneous redemption attempts of
+the same token can't both succeed — replay prevention without needing a
+transaction. No physical scanner/hardware integration exists this phase,
+per the task's explicit scope — this is the backend a later phase's real
+QR camera/reader UI calls directly.
+
+**Front-desk operations are gated by role, on top of the area permission
+— because `TRAINER`'s existing `ATTENDANCE: MANAGE` default means
+something narrower than it sounds.** That default was set in the very
+first authz phase so a trainer could record their *own* class/PT roster
+(exactly what `ClassBookingsController`/`PtSessionsController`'s new
+`:id/attendance` routes use it for, scoped to classes/sessions they teach
+— a `TRAINER` caller gets a `403` marking someone else's roster). Reusing
+the same `PermissionArea.ATTENDANCE` for the new gym-wide check-in desk
+would have accidentally handed every trainer front-desk and attendance-
+history access no product brief asked for. `AttendanceController`'s
+gym-wide routes (manual check-in, staff check-out, history/search, today,
+stats, inactive-members, QR redemption) therefore stack a
+`@Roles(OWNER, MANAGER, FRONT_DESK)` on top of
+`@RequirePermission(ATTENDANCE, ...)` — excluding `TRAINER` specifically —
+while the `/me` self-service routes (check-in, check-out, status, history,
+token issuance) carry no role/permission decorator at all, open to any
+authenticated user with a `Member` profile, the same shape
+`ClassBookingsController`'s `/me` routes already use.
+
+**History, search, today, and stats are business-oriented reads, not
+blind CRUD, and deliberately don't rebuild Reports.**
+`GET /attendance` supports `memberId`/`method`/`open`/date-range filters
+with the shared `PaginationQueryDto`; `GET /attendance/today` returns
+today's check-ins plus a live "currently in the gym" count
+(`checkOutAt: null`); `GET /attendance/stats` returns day-bucketed visit
+counts over a date range — enough to back the approved frontend's
+weekly/monthly trend charts without a general reporting engine.
+`GET /attendance/inactive-members` returns `ACTIVE` members with no visit
+in the last N days (default 14) — accurate, queryable data only (two
+`groupBy` queries, no scoring/prediction), the raw material a future
+retention feature builds decisions on top of, per the task's own framing.
+
+**Notification integration hooks into the existing event/listener system,
+doesn't rebuild it.** Two new domain events
+(`events/domain-events.ts`): `CHECK_IN_DENIED` (staff alert only, on a
+real membership-related denial — not a technical failure like a bad QR
+token, and not the member: they already saw the denial on-screen, the same
+"the actor already knows" reasoning `BOOKING_CANCELLED_BY_STAFF` uses) and
+`CLASS_BOOKING_NO_SHOW`/`PT_SESSION_NO_SHOW` (member alert, since they
+weren't there to see the mark happen — the mirror image of why an
+`ATTENDED` mark fires nothing at all). Handled by two new cases in the
+same `NotificationsEventListener`, under `NotificationCategory.ATTENDANCE`
+— the category this schema reserved back in the Notifications phase
+specifically for this.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -1283,26 +1393,24 @@ renewal chain, concurrency-safe under simultaneous renewal/create),
 charge type), **Invoices** (auto-generated 1:1 alongside every
 transaction, safe sequential numbering, owner search + member
 self-access), **Refunds** (full/partial, concurrency-safe validation
-against what's actually still refundable), and now **Notifications &
+against what's actually still refundable), **Notifications &
 Communication** (an event-driven in-app notification layer covering
 booking/PT/membership/payment lifecycle events, per-user preferences,
 gym-wide announcements to eight targetable audiences, and five daily
-scheduled reminder jobs) — see the sections above for the full model.
+scheduled reminder jobs), and now **Attendance & Check-in** (general gym
+check-in/check-out backed by real membership eligibility, a working
+opaque-token QR check-in mechanism, class/PT attendance marking on the
+existing booking/session rows, history/search/today/stats, and inactive-
+member insight data) — see the sections above for the full model.
 
 **Not here, by design**: a real payment gateway (Razorpay/Stripe/etc — see
 the Payments section above for the placeholder seams already in place: no
-provider SDK, webhook endpoint, or secret exists yet), Attendance (booking
-statuses `ATTENDED`/`NO_SHOW` exist on `ClassBooking`/
-`PersonalTrainingSession` as schema groundwork, but nothing sets them yet
-— see the Trainers/Classes/Bookings section above; class/PT booking
-eligibility still uses `Member.status === ACTIVE` rather than the new real
-membership data, since wiring that check is booking-module work out of
-this phase's scope, and the `ATTENDANCE` notification category has no
-trigger yet for the same reason), a real external notification channel
+provider SDK, webhook endpoint, or secret exists yet), a real external notification channel
 (email/SMS/push — see the Notifications section above for why the core
 domain needs no redesign to add one later), the full Reports
-module (`GET /transactions/stats` and `GET /memberships/stats` exist as
-data sources a future Reports module can consume, not a Reports module
+module (`GET /transactions/stats`, `GET /memberships/stats`, and now
+`GET /attendance/stats`/`GET /attendance/inactive-members` exist as data
+sources a future Reports module can consume, not a Reports module
 itself), Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
 `Transaction.relatedClassBookingId`'s sibling relation columns exist as
 schema groundwork only), Expenses, Audit/Activity, and any platform-level
@@ -1426,21 +1534,28 @@ duplicating any of them.
   that specific occurrence is later individually edited. A narrow gap,
   documented rather than solved with a heavier check across every future
   occurrence of every series.
-- `ClassBooking`/`PersonalTrainingSession` carry `ATTENDED`/`NO_SHOW` (and
-  `COMPLETED` for PT) status values with nothing in this phase that ever
-  sets them — deliberate schema groundwork for the next phase's Attendance
-  module, not a partially-built feature.
+- `ClassBooking`/`PersonalTrainingSession`'s `ATTENDED`/`NO_SHOW` (and
+  `COMPLETED` for PT) status values, reserved as schema groundwork in the
+  Trainers/Classes/Bookings phase, are now actually set — via
+  `markAttendance` on each existing service (see the Attendance & Check-in
+  section above) — rather than staying unused.
 - No configurable booking window (how far ahead a class must be booked) or
   per-tenant cancellation-window setting — the 4-hour cancellation window
   is a hard-coded constant (`CANCELLATION_WINDOW_HOURS`, mirroring the
   approved frontend's own constant), same reasoning as every other
   not-yet-configurable rule in this backend: genuinely supported by the
   product today, not invented ahead of a real need.
-- Class/PT booking eligibility still checks `Member.status === ACTIVE`,
-  not the new real `MemberMembership` data — wiring "does this member
-  currently hold an active membership" into the booking flow is
-  Classes/Bookings-module work, out of scope for this phase (see the
-  Membership Plans section above).
+- Class/PT booking eligibility (`ClassBookingsService.book`/
+  `PtSessionsService.book`) still checks only `Member.status === ACTIVE`,
+  not real `MemberMembership` data — wiring "does this member currently
+  hold an active membership" into the *booking* flow remains
+  Classes/Bookings-module work, out of scope for this phase. This now
+  diverges from gym check-in, which this phase *did* wire to real
+  membership eligibility (`MembershipsService.getCurrentForMember` — see
+  the Attendance & Check-in section above): a member with an expired
+  membership can currently still book a class but would be denied at the
+  door. Worth revisiting Classes/Bookings to use the same eligibility
+  check Attendance now does.
 - No `DELETE` on `MembershipPlan` — archiving is the only removal action,
   by design (see the section above), but this also means a plan created
   by mistake stays visible to staff in the archived list forever rather
@@ -1494,3 +1609,26 @@ duplicating any of them.
   from the server gets its reminders at a fixed UTC-relative hour rather
   than a locally-sensible one, even though `Tenant.timezone` already
   exists in the schema for a future pass to read.
+- No physical QR scanner/hardware integration — `GET
+  /attendance/check-in/token` + `POST /attendance/check-in/redeem` is a
+  complete, working, secure token-issue-and-redeem mechanism, but nothing
+  in this phase drives it from an actual camera/reader; a staff client
+  today would call `redeem` with a token typed/scanned by some other means.
+  This was explicit scope for this phase (see the Attendance & Check-in
+  section above).
+- A trainer can only mark class/PT attendance one booking/session at a
+  time (`POST /class-bookings/:id/attendance`,
+  `POST /pt-sessions/:id/attendance`) — no bulk "mark everyone present"
+  endpoint. The approved frontend's Trainer Attendance page already marks
+  one roster row at a time, so this matches actual UI need rather than
+  anticipating a bulk action nothing asks for yet.
+- `AttendanceService.inactiveMembers` is a same-request computation (two
+  `groupBy` queries over the full check-in history), not a cached/
+  materialized view — fine at today's scale; worth revisiting once a
+  gym's check-in volume makes a full-history scan on every call worth
+  measuring.
+- `GET /attendance/stats` buckets by day only, with no week/month
+  granularity option server-side — the approved frontend's weekly/monthly
+  toggle is trivial to derive client-side from daily buckets (sum by ISO
+  week/month), so a second aggregation mode wasn't built until a real need
+  for server-side rollups appears.

@@ -13,6 +13,7 @@ import type { ReschedulePtSessionDto } from './dto/reschedule-pt-session.dto.js'
 import type { ListPtSessionsQueryDto } from './dto/list-pt-sessions-query.dto.js';
 import { PaginatedResult } from '../common/dto/pagination-query.dto.js';
 import { toPtSessionResponse, type PtSessionResponseDto, type FreeSlotDto } from './dto/pt-session-response.dto.js';
+import type { PtAttendanceMarkStatus } from './dto/mark-attendance.dto.js';
 
 /** Mirrors ClassBookingsService's own — self-cancelling a PT session follows the same notice period as a class booking. */
 const CANCELLATION_WINDOW_HOURS = 4;
@@ -293,6 +294,47 @@ export class PtSessionsService {
     ]);
 
     return new PaginatedResult(items.map(toPtSessionResponse), totalItems, query.page, query.limit);
+  }
+
+  /**
+   * Records — or corrects — a PT session's attendance outcome. Only a
+   * CONFIRMED, COMPLETED, or NO_SHOW session can have attendance touched
+   * (never CANCELLED); marking `CONFIRMED` reverts a previous
+   * COMPLETED/NO_SHOW mark back to pending, mirroring
+   * ClassBookingsService.markAttendance. A TRAINER caller is restricted to
+   * their own sessions.
+   */
+  async markAttendance(tenantId: string, id: string, status: PtAttendanceMarkStatus, caller?: CallerContext): Promise<PtSessionResponseDto> {
+    const existing = await this.prisma.personalTrainingSession.findFirst({ where: { id, tenantId } });
+    if (!existing) {
+      throw new NotFoundException('Personal training session not found.');
+    }
+    if (caller?.role === UserRole.TRAINER && existing.trainerId !== caller.id) {
+      throw new ForbiddenException("You don't have access to this session.");
+    }
+    const markable = [PtSessionStatus.CONFIRMED, PtSessionStatus.COMPLETED, PtSessionStatus.NO_SHOW] as const;
+    if (!markable.includes(existing.status as (typeof markable)[number])) {
+      throw new BadRequestException('Only a confirmed session can have attendance recorded.');
+    }
+
+    const session = await this.prisma.personalTrainingSession.update({
+      where: { id },
+      data: { status: status as PtSessionStatus },
+      include: sessionInclude,
+    });
+    const result = toPtSessionResponse(session);
+
+    if (status === PtSessionStatus.NO_SHOW && existing.status !== PtSessionStatus.NO_SHOW) {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.PT_SESSION_NO_SHOW, {
+        tenantId,
+        memberId: result.member.id,
+        bookingId: result.id,
+        className: 'personal training',
+        date: result.date,
+        startTime: result.startTime,
+      });
+    }
+    return result;
   }
 
   private async assertTrainerFree(

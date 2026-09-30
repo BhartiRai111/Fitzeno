@@ -38,6 +38,9 @@ export const NOTIFICATION_EVENTS = {
   TRANSACTION_PAID: 'transaction.paid',
   TRANSACTION_FAILED: 'transaction.failed',
   TRANSACTION_REFUNDED: 'transaction.refunded',
+  CHECK_IN_DENIED: 'check-in.denied',
+  CLASS_BOOKING_NO_SHOW: 'class-booking.no-show',
+  PT_SESSION_NO_SHOW: 'pt-session.no-show',
 } as const;
 
 export interface BookingConfirmedEvent {
@@ -123,4 +126,33 @@ export interface TransactionRefundedEvent {
   amount: number;
   currency: string;
   isFullRefund: boolean;
+}
+
+/**
+ * A member's own check-in attempt was turned away for a business reason
+ * (expired/frozen/cancelled membership, no membership at all, or an
+ * inactive member record) — never for a technical failure like an invalid
+ * QR token, which has no member context to notify about. Notifies staff
+ * only, not the member: they're standing at the door and already saw the
+ * denial on-screen (kiosk/front-desk) or on their own phone (self QR) —
+ * the same "the actor already knows" reasoning BOOKING_CANCELLED_BY_STAFF's
+ * own comment gives for who does and doesn't get told. Staff being told
+ * turns a lost visit into a follow-up opportunity (renew at the desk),
+ * mirroring TRANSACTION_FAILED's own staff-alert reasoning.
+ */
+export interface CheckInDeniedEvent {
+  tenantId: string;
+  memberId: string;
+  memberName: string;
+  reason: 'MEMBERSHIP_EXPIRED' | 'MEMBERSHIP_FROZEN' | 'MEMBERSHIP_CANCELLED' | 'NO_MEMBERSHIP' | 'MEMBER_INACTIVE';
+}
+
+/** A trainer marked a member's class/PT booking as a no-show — the member wasn't there to see it happen, unlike an ATTENDED mark, which needs no notification. */
+export interface AttendanceNoShowEvent {
+  tenantId: string;
+  memberId: string;
+  bookingId: string;
+  className: string;
+  date: Date;
+  startTime: string;
 }

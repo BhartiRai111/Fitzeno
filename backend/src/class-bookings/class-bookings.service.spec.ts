@@ -43,6 +43,7 @@ function makeBookingRow(overrides: Record<string, unknown> = {}) {
 
 describe('ClassBookingsService', () => {
   let prisma: PrismaService;
+  let eventEmitter: EventEmitter2;
   let service: ClassBookingsService;
 
   beforeEach(() => {
@@ -63,7 +64,7 @@ describe('ClassBookingsService', () => {
       ),
     } as unknown as PrismaService;
 
-    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
     service = new ClassBookingsService(prisma, eventEmitter);
   });
 
@@ -203,6 +204,75 @@ describe('ClassBookingsService', () => {
 
       const result = await service.promote('tenant-1', 'booking-1');
       expect(result.status).toBe('CONFIRMED');
+    });
+  });
+
+  describe('markAttendance', () => {
+    it('records ATTENDED for a confirmed booking', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(makeBookingRow({ status: 'CONFIRMED' }) as never);
+      vi.mocked(prisma.classBooking.update).mockResolvedValue(makeBookingRow({ status: 'ATTENDED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'booking-1', 'ATTENDED');
+
+      expect(result.status).toBe('ATTENDED');
+    });
+
+    it('records NO_SHOW and emits a notification event', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(makeBookingRow({ status: 'CONFIRMED' }) as never);
+      vi.mocked(prisma.classBooking.update).mockResolvedValue(makeBookingRow({ status: 'NO_SHOW' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'booking-1', 'NO_SHOW');
+
+      expect(result.status).toBe('NO_SHOW');
+      expect(eventEmitter.emit).toHaveBeenCalledWith('class-booking.no-show', expect.objectContaining({ memberId: 'member-1' }));
+    });
+
+    it('reverts a marked booking back to CONFIRMED', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(makeBookingRow({ status: 'ATTENDED' }) as never);
+      vi.mocked(prisma.classBooking.update).mockResolvedValue(makeBookingRow({ status: 'CONFIRMED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'booking-1', 'CONFIRMED');
+
+      expect(result.status).toBe('CONFIRMED');
+    });
+
+    it('rejects marking attendance on a waitlisted booking', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(makeBookingRow({ status: 'WAITLISTED' }) as never);
+
+      await expect(service.markAttendance('tenant-1', 'booking-1', 'ATTENDED')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects marking attendance on a cancelled booking', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(makeBookingRow({ status: 'CANCELLED' }) as never);
+
+      await expect(service.markAttendance('tenant-1', 'booking-1', 'ATTENDED')).rejects.toThrow(BadRequestException);
+    });
+
+    it("restricts a TRAINER caller to classes they teach", async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(
+        makeBookingRow({ status: 'CONFIRMED', classOccurrence: makeOccurrence({ trainerId: 'other-trainer' }) }) as never,
+      );
+
+      await expect(
+        service.markAttendance('tenant-1', 'booking-1', 'ATTENDED', { id: 'trainer-1', role: 'TRAINER' as never }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows a TRAINER caller to mark attendance for their own class', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(
+        makeBookingRow({ status: 'CONFIRMED', classOccurrence: makeOccurrence({ trainerId: 'trainer-1' }) }) as never,
+      );
+      vi.mocked(prisma.classBooking.update).mockResolvedValue(makeBookingRow({ status: 'ATTENDED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'booking-1', 'ATTENDED', { id: 'trainer-1', role: 'TRAINER' as never });
+
+      expect(result.status).toBe('ATTENDED');
+    });
+
+    it('throws NotFoundException for a booking outside the tenant', async () => {
+      vi.mocked(prisma.classBooking.findFirst).mockResolvedValue(null);
+
+      await expect(service.markAttendance('tenant-1', 'booking-from-another-gym', 'ATTENDED')).rejects.toThrow('Booking not found.');
     });
   });
 });

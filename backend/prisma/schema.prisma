@@ -112,6 +112,8 @@ model Tenant {
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   announcements           Announcement[]
+  checkIns                CheckIn[]
+  checkInTokens           CheckInToken[]
 
   @@map("tenants")
 }
@@ -225,6 +227,10 @@ model User {
   ptSessionsTaught       PersonalTrainingSession[] @relation("PtSessionTrainer")
   transactionsRecorded   Transaction[]
   refundsProcessed       Refund[]
+  /// Gym check-ins this user personally recorded at the front desk (MANUAL/
+  /// KIOSK) — null for a member's own QR self-check-in, see CheckIn's own
+  /// comment.
+  checkInsRecorded       CheckIn[]                 @relation("CheckInRecordedBy")
 
   /// Every in-app notification addressed to this login — see Notification's
   /// own comment for why the recipient is always a User, never a Member/
@@ -424,6 +430,8 @@ model Member {
   memberships   MemberMembership[]
   transactions  Transaction[]
   invoices      Invoice[]
+  checkIns      CheckIn[]
+  checkInTokens CheckInToken[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -1620,4 +1628,115 @@ model Announcement {
 
   @@index([tenantId, createdAt])
   @@map("announcements")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 — Attendance & Check-in. Two attendance concepts, kept separate,
+// mirroring the approved frontend's own split (the Attendance/Check-in pages
+// vs. the Trainer's per-class roster page):
+//
+//   CheckIn — a general gym VISIT: the member walked in the door, independent
+//     of whether they came for a class, PT, or just to use the floor. One row
+//     per visit (check-in + optional check-out).
+//   Class/PT attendance — NOT a second CheckIn-shaped table. "Booked" and
+//     "attended" are two facts about the same booking, so it's recorded as a
+//     status transition on ClassBooking/PersonalTrainingSession itself —
+//     ATTENDED/NO_SHOW already exist as enum values on both (see each
+//     model's own comment; nothing set them until this phase). Keeping this
+//     on the booking row (rather than a parallel attendance record) is what
+//     "booking and attendance must remain distinct concepts, no duplicate
+//     source of truth" means concretely here: distinct STATES on one row,
+//     not two rows.
+//
+// CheckInToken — the server side of the QR/kiosk check-in mechanism. A
+// member's own app requests one (authenticated as themselves), gets back an
+// opaque, single-use, short-lived token; a staff-operated scanner (today) or
+// real hardware (later) redeems it against a member. The raw token is only
+// ever held by the member's client and briefly in memory — like
+// PasswordResetToken, only its SHA-256 hash is ever persisted, via the same
+// TokenService — so a captured screenshot of an old QR is useless once
+// expired, and a captured live one only ever works once (`consumedAt`).
+// Deliberately NOT a self-contained signed JWT: this needs a database row to
+// mark consumed (replay prevention) and to audit issue/redeem, not just a
+// signature to verify — the same reasoning PasswordResetToken's own comment
+// gives for opaque, DB-backed tokens over JWTs wherever revocability matters.
+// ---------------------------------------------------------------------------
+
+/// QR — the member's own app-generated code, redeemed via CheckInToken.
+/// MANUAL — a staff member typed/selected the member at the front desk
+///   (forgotten phone, code won't scan, etc.).
+/// KIOSK — a shared front-desk device/reader, not tied to one staff member's
+///   own judgment call the way MANUAL is — kept distinct since the approved
+///   frontend already surfaces "Kiosk" as its own method label.
+enum CheckInMethod {
+  QR
+  MANUAL
+  KIOSK
+
+  @@map("check_in_method")
+}
+
+// ---------------------------------------------------------------------------
+// CheckIn — see the phase-level comment above. No DB-level constraint
+// prevents a member from holding more than one open (checkOutAt: null) row
+// at a time — enforced in AttendanceService instead (mirrors this schema's
+// existing precedent of business-rule uniqueness, e.g. ClassBooking's
+// waitlist-promotion ordering, living in the service layer rather than a
+// database constraint), because the rule itself belongs to
+// AttendanceService's judgment call on what "already checked in" should
+// mean, not a hard schema invariant.
+// ---------------------------------------------------------------------------
+model CheckIn {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  method CheckInMethod
+
+  /// Who performed the check-in action — null for a member's own QR
+  /// self-check-in; set to the staff User for MANUAL/KIOSK front-desk
+  /// entries. SetNull (not Cascade/Restrict): a staff account being removed
+  /// later must never delete or block deleting historical visit records.
+  recordedByUserId String? @map("recorded_by_user_id")
+  recordedByUser   User?   @relation("CheckInRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  checkInAt  DateTime  @default(now()) @map("check_in_at")
+  checkOutAt DateTime? @map("check_out_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId, checkInAt])
+  @@index([tenantId, checkInAt])
+  @@map("check_ins")
+}
+
+// ---------------------------------------------------------------------------
+// CheckInToken — see the phase-level comment above. `expiresAt` is set a
+// short, fixed window (AttendanceService.CHECK_IN_TOKEN_TTL_SECONDS) from
+// issuance — long enough for a member to present their phone, short enough
+// that a captured/screenshotted code is worthless within seconds of leaving
+// that window.
+// ---------------------------------------------------------------------------
+model CheckInToken {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hash of the opaque token handed to the member's client — see
+  /// the phase-level comment; the raw value is never stored.
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@map("check_in_tokens")
 }
