@@ -20,26 +20,49 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { BookingStatusBadge } from "@/components/shared/status-badge";
-import { gymClasses } from "@/lib/data/classes";
-import { classBookings as initialClassBookings } from "@/lib/data/class-bookings";
-import { ptSessions as initialPtSessions } from "@/lib/data/pt-sessions";
+import { useAuth } from "@/lib/auth/auth-context";
+import { useClassOccurrences } from "@/hooks/use-classes";
+import { useClassBookingsRoster, useMarkClassAttendance } from "@/hooks/use-class-bookings";
+import { usePtSessionsRoster, useMarkPtAttendance } from "@/hooks/use-pt-sessions";
+import { toInitials } from "@/lib/api/enum-maps";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { formatDate } from "@/lib/utils-data";
-import { DEMO_TRAINER_ID, TODAY, TODAY_DAY } from "@/lib/booking-helpers";
-import type { ClassBooking, PtSession } from "@/lib/data/types";
 
-const TRAINER_ID = DEMO_TRAINER_ID;
-const TODAY_ISO = TODAY;
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
+}
 
 export default function TrainerAttendancePage() {
-  const [classBookings, setClassBookings] = React.useState<ClassBooking[]>(initialClassBookings);
-  const [ptSessions, setPtSessions] = React.useState<PtSession[]>(initialPtSessions);
+  const { user } = useAuth();
+  const todayIso = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const yesterdayIso = React.useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }, []);
 
-  const todaysClasses = gymClasses.filter((c) => c.trainerId === TRAINER_ID && c.day === TODAY_DAY);
-  const todaysPt = ptSessions.filter((s) => s.trainerId === TRAINER_ID && s.date === TODAY_ISO);
+  const { classes: todaysClasses, isLoading: classesLoading } = useClassOccurrences({
+    trainerId: user?.id,
+    from: todayIso,
+    to: todayIso,
+  });
+  const { raw: allBookings, isLoading: bookingsLoading } = useClassBookingsRoster({ limit: 200 });
+  const { sessions: todaysPt, isLoading: ptLoading } = usePtSessionsRoster({ from: todayIso, to: todayIso });
+  const { sessions: pastPt } = usePtSessionsRoster({ to: yesterdayIso, limit: 20 });
 
-  const classRosters = todaysClasses.map((c) => ({
-    gymClass: c,
-    roster: classBookings.filter((b) => b.classId === c.id && (b.status === "booked" || b.status === "attended" || b.status === "no-show")),
+  const markClassAttendance = useMarkClassAttendance();
+  const markPtAttendance = useMarkPtAttendance();
+
+  const classRosters = todaysClasses.map((gymClass) => ({
+    gymClass,
+    roster: allBookings
+      .filter((b) => b.classOccurrence.id === gymClass.id && (b.status === "CONFIRMED" || b.status === "ATTENDED" || b.status === "NO_SHOW"))
+      .map((b) => ({
+        id: b.id,
+        memberName: `${b.member.firstName} ${b.member.lastName}`,
+        memberInitials: toInitials(b.member.firstName, b.member.lastName),
+        status: b.status === "CONFIRMED" ? ("booked" as const) : b.status === "ATTENDED" ? ("attended" as const) : ("no-show" as const),
+      })),
   }));
 
   const totalRoster = classRosters.reduce((sum, r) => sum + r.roster.length, 0);
@@ -47,28 +70,35 @@ export default function TrainerAttendancePage() {
     (sum, r) => sum + r.roster.filter((b) => b.status === "attended" || b.status === "no-show").length,
     0
   );
+  const todaysActivePt = todaysPt.filter((s) => s.status !== "cancelled");
   const totalNoShows =
     classRosters.reduce((sum, r) => sum + r.roster.filter((b) => b.status === "no-show").length, 0) +
-    todaysPt.filter((s) => s.status === "no-show").length;
+    todaysActivePt.filter((s) => s.status === "no-show").length;
 
-  const pastPt = ptSessions
-    .filter((s) => s.trainerId === TRAINER_ID && s.date < TODAY_ISO)
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  function markClass(bookingId: string, status: "attended" | "no-show" | "booked") {
-    setClassBookings((prev) => prev.map((b) => (b.id === bookingId ? { ...b, status } : b)));
-    const booking = classBookings.find((b) => b.id === bookingId);
-    if (status !== "booked" && booking) {
-      toast.success(`${booking.memberName} marked ${status === "attended" ? "present" : "no-show"}`);
-    }
+  function markClass(bookingId: string, status: "attended" | "no-show" | "booked", memberName: string) {
+    const backendStatus = status === "attended" ? "ATTENDED" : status === "no-show" ? "NO_SHOW" : "CONFIRMED";
+    markClassAttendance.mutate(
+      { id: bookingId, status: backendStatus },
+      {
+        onSuccess: () => {
+          if (status !== "booked") toast.success(`${memberName} marked ${status === "attended" ? "present" : "no-show"}`);
+        },
+        onError: (err) => toast.error(errorMessage(err, "Couldn't update attendance. Please try again.")),
+      }
+    );
   }
 
-  function markPt(sessionId: string, status: "attended" | "no-show" | "booked") {
-    setPtSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, status } : s)));
-    const session = ptSessions.find((s) => s.id === sessionId);
-    if (status !== "booked" && session) {
-      toast.success(`${session.memberName} marked ${status === "attended" ? "present" : "no-show"}`);
-    }
+  function markPt(sessionId: string, status: "attended" | "no-show" | "booked", memberName: string) {
+    const backendStatus = status === "attended" ? "COMPLETED" : status === "no-show" ? "NO_SHOW" : "CONFIRMED";
+    markPtAttendance.mutate(
+      { id: sessionId, status: backendStatus },
+      {
+        onSuccess: () => {
+          if (status !== "booked") toast.success(`${memberName} marked ${status === "attended" ? "present" : "no-show"}`);
+        },
+        onError: (err) => toast.error(errorMessage(err, "Couldn't update attendance. Please try again.")),
+      }
+    );
   }
 
   return (
@@ -79,12 +109,14 @@ export default function TrainerAttendancePage() {
         <StatCard label="Classes Today" value={todaysClasses.length.toString()} icon={ClipboardCheck} />
         <StatCard label="Roster Marked" value={`${totalMarked}/${totalRoster}`} icon={Users} helpText="attendance recorded" />
         <StatCard label="No-shows Today" value={totalNoShows.toString()} icon={UserX} />
-        <StatCard label="PT Sessions Today" value={todaysPt.length.toString()} icon={Clock} />
+        <StatCard label="PT Sessions Today" value={todaysActivePt.length.toString()} icon={Clock} />
       </div>
 
       <div>
         <h2 className="mb-3 font-display text-base font-semibold text-foreground">Today&apos;s classes</h2>
-        {classRosters.length === 0 ? (
+        {classesLoading || bookingsLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : classRosters.length === 0 ? (
           <EmptyState icon={ClipboardCheck} title="No classes today" description="You're not teaching any classes today." />
         ) : (
           <div className="space-y-4">
@@ -116,11 +148,11 @@ export default function TrainerAttendancePage() {
                         </div>
                         {entry.status === "booked" ? (
                           <div className="flex shrink-0 gap-1.5">
-                            <Button size="sm" variant="outline" onClick={() => markClass(entry.id, "attended")}>
+                            <Button size="sm" variant="outline" onClick={() => markClass(entry.id, "attended", entry.memberName)}>
                               <CheckCircle2 className="size-3.5" />
                               Present
                             </Button>
-                            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => markClass(entry.id, "no-show")}>
+                            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => markClass(entry.id, "no-show", entry.memberName)}>
                               <XCircle className="size-3.5" />
                               No-show
                             </Button>
@@ -128,7 +160,7 @@ export default function TrainerAttendancePage() {
                         ) : (
                           <div className="flex shrink-0 items-center gap-1.5">
                             <BookingStatusBadge status={entry.status} />
-                            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markClass(entry.id, "booked")} aria-label={`Revert ${entry.memberName} to booked`}>
+                            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markClass(entry.id, "booked", entry.memberName)} aria-label={`Revert ${entry.memberName} to booked`}>
                               <Undo2 className="size-3.5" />
                             </Button>
                           </div>
@@ -145,11 +177,13 @@ export default function TrainerAttendancePage() {
 
       <div>
         <h2 className="mb-3 font-display text-base font-semibold text-foreground">Personal training today</h2>
-        {todaysPt.length === 0 ? (
+        {ptLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : todaysActivePt.length === 0 ? (
           <EmptyState icon={Users} title="No PT sessions today" description="Nothing booked with you today." />
         ) : (
           <Card className="divide-y divide-border p-0">
-            {todaysPt.map((session) => (
+            {todaysActivePt.map((session) => (
               <div key={session.id} className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <Avatar className="size-9 shrink-0">
@@ -162,11 +196,11 @@ export default function TrainerAttendancePage() {
                 </div>
                 {session.status === "booked" ? (
                   <div className="flex shrink-0 gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => markPt(session.id, "attended")}>
+                    <Button size="sm" variant="outline" onClick={() => markPt(session.id, "attended", session.memberName)}>
                       <CheckCircle2 className="size-3.5" />
                       Present
                     </Button>
-                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => markPt(session.id, "no-show")}>
+                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => markPt(session.id, "no-show", session.memberName)}>
                       <XCircle className="size-3.5" />
                       No-show
                     </Button>
@@ -174,7 +208,7 @@ export default function TrainerAttendancePage() {
                 ) : (
                   <div className="flex shrink-0 items-center gap-1.5">
                     <BookingStatusBadge status={session.status} />
-                    <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markPt(session.id, "booked")} aria-label={`Revert ${session.memberName} to booked`}>
+                    <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => markPt(session.id, "booked", session.memberName)} aria-label={`Revert ${session.memberName} to booked`}>
                       <Undo2 className="size-3.5" />
                     </Button>
                   </div>
@@ -205,7 +239,7 @@ export default function TrainerAttendancePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pastPt.slice(0, 8).map((session) => (
+                  {[...pastPt].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 8).map((session) => (
                     <tr key={session.id} className="border-b border-border last:border-0 hover:bg-muted/40">
                       <td className="py-2.5">
                         <div className="flex items-center gap-2.5">
