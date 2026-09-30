@@ -345,4 +345,42 @@ describe('TransactionsService', () => {
       expect(stats.paidCount).toBe(5);
     });
   });
+
+  describe('getRevenueSummary', () => {
+    it('counts PAID, PARTIALLY_REFUNDED, and REFUNDED transactions as gross revenue', async () => {
+      vi.mocked(prisma.transaction.aggregate).mockResolvedValueOnce({ _sum: { amount: 1200 }, _count: 4 } as never);
+      vi.mocked(prisma.transaction.groupBy).mockResolvedValueOnce([{ type: 'MEMBERSHIP_PURCHASE', _sum: { amount: 1200 } }] as never);
+      vi.mocked(prisma.refund.aggregate).mockResolvedValueOnce({ _sum: { amount: null } } as never);
+
+      const summary = await service.getRevenueSummary('tenant-1');
+
+      expect(summary.grossRevenue).toBe(1200);
+      expect(prisma.transaction.aggregate).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] } }) }),
+      );
+    });
+
+    it('nets refunds out of gross revenue, and never counts a failed/pending transaction', async () => {
+      vi.mocked(prisma.transaction.aggregate).mockResolvedValueOnce({ _sum: { amount: 1000 }, _count: 3 } as never);
+      vi.mocked(prisma.transaction.groupBy).mockResolvedValueOnce([] as never);
+      vi.mocked(prisma.refund.aggregate).mockResolvedValueOnce({ _sum: { amount: 150 } } as never);
+
+      const summary = await service.getRevenueSummary('tenant-1');
+
+      expect(summary.grossRevenue).toBe(1000);
+      expect(summary.refunds).toBe(150);
+      expect(summary.netRevenue).toBe(850);
+    });
+
+    it('filters by paidAt (revenue-recognition date), not createdAt, over the given range', async () => {
+      vi.mocked(prisma.transaction.aggregate).mockResolvedValueOnce({ _sum: { amount: 0 }, _count: 0 } as never);
+      vi.mocked(prisma.transaction.groupBy).mockResolvedValueOnce([] as never);
+      vi.mocked(prisma.refund.aggregate).mockResolvedValueOnce({ _sum: { amount: null } } as never);
+
+      await service.getRevenueSummary('tenant-1', { from: '2026-09-01', to: '2026-09-30' });
+
+      const call = vi.mocked(prisma.transaction.aggregate).mock.calls[0]![0] as { where: { paidAt?: object } };
+      expect(call.where.paidAt).toBeDefined();
+    });
+  });
 });

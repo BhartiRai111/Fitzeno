@@ -1327,6 +1327,130 @@ same `NotificationsEventListener`, under `NotificationCategory.ATTENDANCE`
 — the category this schema reserved back in the Notifications phase
 specifically for this.
 
+### Expenses & Financial Overview
+
+A deliberately small operating-expense ledger (a new `expenses/` module)
+plus a `finance/` module that composes it with Payments' own revenue data
+into a single "revenue vs. expenses vs. net result" view — not a second
+accounting system, and not a second place that decides what counts as
+revenue.
+
+**`Expense` stays a flat ledger row, not an accounting structure.**
+`ExpenseCategory` is a closed, product-defined enum (Rent, Salaries,
+Utilities, Marketing, Software, Maintenance, Cleaning, Equipment,
+Supplies, Other) mirroring the approved frontend's own fixed
+`ExpenseCategory` union exactly — the same "closed set with an `OTHER`
+escape hatch" pattern this schema already uses for
+`TransactionType`/`PaymentMethod`/`LeadSource`, rather than a per-tenant
+customizable taxonomy table nothing in the approved product asks for.
+Recurring expenses are metadata only (`ExpenseFrequency`:
+`ONE_TIME`/`MONTHLY`/`QUARTERLY`/`YEARLY`) — **not** a template that
+auto-generates future rows. The approved frontend's own mock ledger
+confirms this is the real product behavior: August's rent and September's
+rent are two independently-recorded rows that both happen to carry
+`frequency: MONTHLY`; there is no "recurring expense generator" anywhere
+in the approved product to mirror, so this phase doesn't build one —
+exactly the "don't create unnecessary scheduling infrastructure" the task
+itself asked for. `recurring` (as a boolean) is never its own stored
+column; it's derived as `frequency !== ONE_TIME` in
+`ExpenseResponseDto`, the same reasoning `Notification.readAt` already
+established for not storing a redundant flag.
+
+**A three-state lifecycle, with a guarded-vs-free-form split matching the
+approved frontend's own two different actions.** `PENDING` → `PAID`
+(`markPaid`) or `PENDING` → `CANCELLED` (`cancel`), and `CANCELLED` →
+`PENDING` (`reopen`, defaulting a missing due date to today) — each a
+single atomic `updateMany` guarded by the expected current status, the
+exact same pattern `TransactionsService.transitionFromPending` already
+established. `PAID` is deliberately terminal for these guarded actions
+(no "un-pay") so a paid expense's own history stays reliable, mirroring
+`TransactionStatus.PAID`'s own role as a settled fact. Separately, the
+general-purpose `PATCH /expenses/:id` lets staff correct *any* field —
+including setting `status` directly to anything — matching the approved
+frontend's own Edit dialog, which allows exactly that regardless of an
+expense's current state; a direct status change there recomputes
+`paidAt`/`cancelledAt` the same way the guarded actions do, so a
+correction made through Edit stays just as historically accurate.
+`ExpenseCounter` issues each tenant's own sequential `EXP-000123`
+reference, the same single-row-locked-UPDATE pattern `InvoiceCounter`
+already established for invoice numbering.
+
+**Revenue is never recomputed — `TransactionsService.getRevenueSummary`
+is the one new addition on the Payments side, added alongside the
+existing `getStats` rather than replacing it.** `getStats`'s own
+`totalRevenue` (status = `PAID` only, filtered by `createdAt`) silently
+drops any transaction that has since been partially or fully refunded —
+fine for a payments-list summary, wrong for a P&L figure: a transaction
+that was paid and later partially refunded is still real gross revenue,
+just partially given back. `getRevenueSummary` instead sums every
+*settled* transaction (`PAID`, `PARTIALLY_REFUNDED`, `REFUNDED` — never
+`PENDING`/`PROCESSING`/`FAILED`/`CANCELLED`, which were never actually
+received) by `paidAt` (the date money actually changed hands, not
+`createdAt`), and nets out actual `Refund` rows by their own
+`completedAt` — giving `{ grossRevenue, refunds, netRevenue }` that's
+internally consistent for any date range, and that the financial
+overview never miscounts a failed or still-pending payment into.
+`FinanceService` composes this with `ExpensesService.getSummary` (paid
+expenses only, by category, recurring-vs-one-time split) — neither
+service duplicates the other's business rules about what counts as
+"real" revenue or "real" spend.
+
+**Date/period handling ports the approved frontend's own logic verbatim,
+not a superset.** `FinanceService`'s internal `getPresetRange`/
+`getComparisonRange` are a line-for-line backend port of
+`reports-helpers.ts`'s own preset math — `today`/`week`/`month`/
+`last-month`/`custom`, with `month`'s comparison period matched to the
+same day-of-month in the prior month (so a partial current month isn't
+unfairly measured against a full previous one) and `today`/`week`/
+`custom` shifted back by the range's own length. No `quarter`/`year`
+presets exist, because the approved frontend's own `PeriodPreset` type
+doesn't have them — "the date/filter functionality the existing UI
+actually needs," not a speculative superset.
+
+**`GET /finance/overview`** is the one endpoint the Financial Overview
+dashboard needs: gross/net revenue, refunds, total (paid) expenses, net
+result, profit margin (net result ÷ net revenue, 0 when there's no
+revenue to divide by), revenue-by-type, expenses-by-category, recurring-
+vs-one-time, unusual category increases (a direct backend port of the
+approved frontend's own `getUnusualIncreases` — flags a category only
+against a *real* prior baseline, so a category with no spend last period
+reads as "new," never a misleading +100%), and current-state pending/
+overdue/due-soon expense figures (deliberately **not** period-filtered,
+matching the approved frontend's own "operational insights" convention on
+Reports Overview and the Finances Overview tab itself). **`GET
+/finance/trend`** returns month-bucketed revenue/expenses/net for the
+trailing N months (default 6, capped at 12) — a real backend equivalent
+of the approved frontend's currently-mocked `revenueByMonth`/
+`expensesByMonth` series, computed as N small aggregate-query pairs
+rather than a raw-SQL date-bucketing query this codebase doesn't use
+anywhere else.
+
+**Gated entirely on the existing `FINANCE` PermissionArea — no additional
+role-stacking needed.** Unlike `ATTENDANCE` in the previous phase (whose
+`TRAINER` default had to be worked around with `@Roles()`), `FINANCE`'s
+own role defaults already match this data's intended sensitivity exactly:
+`OWNER`/`MANAGER` get `MANAGE`, `TRAINER`/`FRONT_DESK` get `NONE` —
+matching the approved frontend's own Finances page, which states outright
+that it's "visible to Owner and Manager roles only." Every expense and
+finance route is a plain `@RequirePermission(FINANCE, VIEW|MANAGE)`.
+
+**Notification/audit compatibility is prepared, not built.**
+`NotificationCategory.FINANCE` now exists in the schema — the same
+reserve-ahead-of-trigger pattern `STAFF`/`PROMOTION` already established
+— but nothing emits it yet: the approved product has no automated
+"unusual expense" alert concept to mirror (the unusual-category-increase
+detection above is a read-time insight the Financial Overview computes on
+request, exactly like the frontend's own equivalent, not a stored/
+triggered event), and inventing a specific materiality threshold nothing
+in the approved product asks for would be exactly the kind of speculative
+business rule this phase's own instructions warn against. There is
+likewise still no dedicated audit/activity log for expense mutations to
+hook into (see the existing "No dedicated audit/activity log yet"
+limitation below) — `ExpensesService`'s own single-purpose methods
+(`create`/`update`/`markPaid`/`cancel`/`reopen`) are the same shape that
+made this backend's existing event emission straightforward to add
+elsewhere, ready for a future audit module to hook into the same way.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -1397,23 +1521,29 @@ against what's actually still refundable), **Notifications &
 Communication** (an event-driven in-app notification layer covering
 booking/PT/membership/payment lifecycle events, per-user preferences,
 gym-wide announcements to eight targetable audiences, and five daily
-scheduled reminder jobs), and now **Attendance & Check-in** (general gym
+scheduled reminder jobs), **Attendance & Check-in** (general gym
 check-in/check-out backed by real membership eligibility, a working
 opaque-token QR check-in mechanism, class/PT attendance marking on the
 existing booking/session rows, history/search/today/stats, and inactive-
-member insight data) — see the sections above for the full model.
+member insight data), and now **Expenses & Financial Overview** (a flat
+operating-expense ledger with categories, a paid/pending/cancelled
+lifecycle, and recurring metadata; a Financial Overview endpoint composing
+that with Payments' own refund-aware revenue data into gross/net revenue,
+net result, profit margin, category/recurring breakdowns, and a
+month-bucketed trend) — see the sections above for the full model.
 
 **Not here, by design**: a real payment gateway (Razorpay/Stripe/etc — see
 the Payments section above for the placeholder seams already in place: no
 provider SDK, webhook endpoint, or secret exists yet), a real external notification channel
 (email/SMS/push — see the Notifications section above for why the core
 domain needs no redesign to add one later), the full Reports
-module (`GET /transactions/stats`, `GET /memberships/stats`, and now
-`GET /attendance/stats`/`GET /attendance/inactive-members` exist as data
-sources a future Reports module can consume, not a Reports module
-itself), Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
+module (`GET /transactions/stats`, `GET /memberships/stats`,
+`GET /attendance/stats`/`GET /attendance/inactive-members`, and now
+`GET /finance/overview`/`GET /finance/trend` exist as data sources a
+future Reports module can consume, not a Reports module itself),
+Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
 `Transaction.relatedClassBookingId`'s sibling relation columns exist as
-schema groundwork only), Expenses, Audit/Activity, and any platform-level
+schema groundwork only), Search, Audit/Activity, and any platform-level
 admin surface (the `TenantStatus.SUSPENDED` state and its enforcement
 exist, but nothing can set it yet). Every one of these is a real business
 domain the frontend
@@ -1632,3 +1762,33 @@ duplicating any of them.
   toggle is trivial to derive client-side from daily buckets (sum by ISO
   week/month), so a second aggregation mode wasn't built until a real need
   for server-side rollups appears.
+- Class/PT booking eligibility (`ClassBookingsService.book`/
+  `PtSessionsService.book`) still checks only `Member.status === ACTIVE`,
+  not real `MemberMembership` data — the same gap noted above, now shared
+  by two independent phases (Attendance's own check-in, and Finance's
+  revenue) that both *did* wire the real membership-eligibility check for
+  their own purposes. Worth revisiting Classes/Bookings to use the same
+  check.
+- No recurring-expense auto-generation — `frequency` on `Expense` is
+  descriptive metadata, not a template. See the Expenses & Financial
+  Overview section above for why this is a deliberate reading of what the
+  approved product actually demonstrates, not a partially-built feature.
+- `ExpenseCategory` is a fixed, product-defined enum — a gym can't define
+  its own custom categories (`OTHER` is the escape hatch). Revisiting this
+  would mean a per-tenant category table, a bigger shift than anything the
+  approved frontend's own fixed `ExpenseCategory` union asks for today.
+- No file/receipt attachment storage for expenses — matching this
+  backend's existing Invoice-PDF gap (see above), there's no file-storage
+  infrastructure anywhere in this backend yet to hook into; the approved
+  frontend's own receipt dialog is print/toast-only with no server
+  document behind it either.
+- `FinanceService.getTrend`'s month-bucketed series runs one pair of
+  aggregate queries per month (bounded at 12) rather than a single
+  date-bucketed query — simple and consistent with this codebase's
+  existing avoidance of raw SQL, but worth revisiting with a proper
+  date-bucketing query if the bound ever needs to grow well past a year.
+- `NotificationCategory.FINANCE` exists but nothing emits it yet — see the
+  Expenses & Financial Overview section above for why: the approved
+  product has no automated "unusual expense" alert concept to mirror, and
+  the unusual-category-increase detection the Financial Overview does
+  surface is a read-time insight, not a stored/triggered event.
