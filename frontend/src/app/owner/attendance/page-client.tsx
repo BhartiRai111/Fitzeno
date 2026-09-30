@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -33,16 +34,15 @@ import { PeakHoursChart } from "@/components/dashboard/charts/peak-hours-chart";
 import { WeeklyAttendanceChart } from "@/components/dashboard/charts/weekly-attendance-chart";
 import { MonthlyAttendanceChart } from "@/components/dashboard/charts/monthly-attendance-chart";
 import { AtRiskMembers } from "@/components/dashboard/at-risk-members";
-import { members } from "@/lib/data/members";
-import { attendanceRecords as initialRecords, weeklyAttendance } from "@/lib/data/attendance";
+import { useMembersRoster } from "@/hooks/use-members";
+import { useAttendanceToday, useAttendanceHistory, useInactiveMembers, useManualCheckIn } from "@/hooks/use-attendance";
+import { weeklyAttendance } from "@/lib/data/attendance";
 import { gymClasses } from "@/lib/data/classes";
 import { classBookings } from "@/lib/data/class-bookings";
 import { trainers } from "@/lib/data/trainers";
-import { formatDate, daysBetween } from "@/lib/utils-data";
-import { TODAY, getMembershipBlock, nowTimeLabel } from "@/lib/attendance-helpers";
-import type { AttendanceRecord } from "@/lib/data/types";
+import { TODAY, getMembershipBlock } from "@/lib/attendance-helpers";
+import { ApiError, NetworkError } from "@/lib/api/types";
 
-const availableDates = Array.from(new Set(initialRecords.map((r) => r.date))).sort().reverse();
 const TODAY_DAY = "Mon" as const;
 
 type TabValue = "today" | "history" | "insights" | "checkin";
@@ -54,23 +54,32 @@ export function AttendancePageClient() {
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [trend, setTrend] = React.useState<TrendView>("weekly");
 
-  const [records, setRecords] = React.useState<AttendanceRecord[]>(initialRecords);
+  const { members } = useMembersRoster();
+  const { records: todaysRecords, totalToday, currentlyIn, isLoading: todayLoading } = useAttendanceToday();
 
   const [historyDate, setHistoryDate] = React.useState(TODAY);
   const [memberFilter, setMemberFilter] = React.useState("all");
+  const { records: historyRecords } = useAttendanceHistory({
+    from: historyDate,
+    to: historyDate,
+    memberId: memberFilter === "all" ? undefined : memberFilter,
+  });
+
+  const { data: inactiveMembers } = useInactiveMembers(14);
+  const { data: atRiskMembers } = useInactiveMembers(7);
 
   const [manualMemberId, setManualMemberId] = React.useState(members[0]?.id);
+  const manualCheckIn = useManualCheckIn();
 
-  const todaysRecords = React.useMemo(
-    () => records.filter((r) => r.date === TODAY).sort((a, b) => b.checkInTime.localeCompare(a.checkInTime)),
-    [records]
-  );
-  const stillIn = todaysRecords.filter((r) => !r.checkOutTime).length;
+  React.useEffect(() => {
+    if (!manualMemberId && members.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setManualMemberId(members[0]!.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members.length]);
+
   const weeklyAvg = Math.round(weeklyAttendance.reduce((sum, d) => sum + d.visits, 0) / weeklyAttendance.length);
-
-  const historyRecords = records.filter(
-    (r) => r.date === historyDate && (memberFilter === "all" || r.memberId === memberFilter)
-  );
 
   const todaysClasses = gymClasses.filter((c) => c.day === TODAY_DAY);
   const classAttendance = todaysClasses.map((c) => {
@@ -81,34 +90,32 @@ export function AttendancePageClient() {
     return { gymClass: c, roster, attended, noShow, pending };
   });
 
-  const inactive14Plus = members.filter((m) => daysBetween(m.lastCheckIn, TODAY) >= 14);
   const mostActive = [...members].sort((a, b) => b.attendanceThisMonth - a.attendanceThisMonth).slice(0, 6);
-  const avgVisitsPerMember = Math.round(
-    (members.reduce((sum, m) => sum + m.attendanceThisMonth, 0) / members.length) * 10
-  ) / 10;
+  const avgVisitsPerMember =
+    members.length === 0 ? 0 : Math.round((members.reduce((sum, m) => sum + m.attendanceThisMonth, 0) / members.length) * 10) / 10;
 
   const manualMember = members.find((m) => m.id === manualMemberId);
   const manualBlock = manualMember ? getMembershipBlock(manualMember.status) : null;
-  const manualAlreadyIn = manualMember
-    ? todaysRecords.find((r) => r.memberId === manualMember.id)
-    : undefined;
+  const manualAlreadyIn = manualMember ? todaysRecords.find((r) => r.memberId === manualMember.id) : undefined;
 
   function handleManualCheckIn() {
     if (!manualMember || manualBlock) return;
-    const time = nowTimeLabel();
-    const newRecord: AttendanceRecord = {
-      id: `at-${Date.now()}`,
-      memberId: manualMember.id,
-      memberName: manualMember.name,
-      memberInitials: manualMember.initials,
-      plan: manualMember.plan,
-      date: TODAY,
-      checkInTime: time,
-      checkOutTime: null,
-      method: "Manual",
-    };
-    setRecords((prev) => [newRecord, ...prev]);
-    toast.success(`${manualMember.name} checked in`, { description: `Front desk · ${time}` });
+    manualCheckIn.mutate(
+      { memberId: manualMember.id },
+      {
+        onSuccess: (attempt) => {
+          if (attempt.outcome === "DENIED") {
+            toast.error(attempt.message);
+            return;
+          }
+          const time = attempt.checkIn ? new Date(attempt.checkIn.checkInAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
+          toast.success(`${manualMember.name} checked in`, { description: `Front desk · ${time}` });
+        },
+        onError: (err) => {
+          toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't check this member in. Please try again.");
+        },
+      }
+    );
   }
 
   return (
@@ -125,8 +132,8 @@ export function AttendancePageClient() {
 
         <TabsContent value="today" className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard label="Checked in today" value={todaysRecords.length.toString()} icon={Users} />
-            <StatCard label="Currently at gym" value={stillIn.toString()} icon={Clock} />
+            <StatCard label="Checked in today" value={todayLoading ? "…" : totalToday.toString()} icon={Users} />
+            <StatCard label="Currently at gym" value={todayLoading ? "…" : currentlyIn.toString()} icon={Clock} />
             <StatCard label="Weekly average" value={weeklyAvg.toString()} icon={TrendingUp} />
           </div>
 
@@ -180,7 +187,6 @@ export function AttendancePageClient() {
                   <thead>
                     <tr className="border-b border-border bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
                       <th className="px-4 py-3 font-medium">Member</th>
-                      <th className="px-4 py-3 font-medium">Membership</th>
                       <th className="px-4 py-3 font-medium">Check-in</th>
                       <th className="px-4 py-3 font-medium">Check-out</th>
                       <th className="px-4 py-3 font-medium">Method</th>
@@ -198,7 +204,6 @@ export function AttendancePageClient() {
                             <span className="font-medium text-foreground">{record.memberName}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">{record.plan}</td>
                         <td className="px-4 py-3 tabular text-muted-foreground">{record.checkInTime}</td>
                         <td className="px-4 py-3 tabular text-muted-foreground">{record.checkOutTime ?? "—"}</td>
                         <td className="px-4 py-3 text-muted-foreground">{record.method}</td>
@@ -219,14 +224,12 @@ export function AttendancePageClient() {
         <TabsContent value="history" className="space-y-4">
           <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <Select value={historyDate} onValueChange={setHistoryDate}>
-                <SelectTrigger className="sm:w-48"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {availableDates.map((d) => (
-                    <SelectItem key={d} value={d}>{formatDate(d)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input
+                type="date"
+                value={historyDate}
+                onChange={(e) => setHistoryDate(e.target.value)}
+                className="sm:w-48"
+              />
               <Select value={memberFilter} onValueChange={setMemberFilter}>
                 <SelectTrigger className="sm:w-52"><SelectValue placeholder="Member" /></SelectTrigger>
                 <SelectContent>
@@ -247,7 +250,6 @@ export function AttendancePageClient() {
                   <thead>
                     <tr className="border-b border-border bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
                       <th className="px-4 py-3 font-medium">Member</th>
-                      <th className="px-4 py-3 font-medium">Membership</th>
                       <th className="px-4 py-3 font-medium">Check-in</th>
                       <th className="px-4 py-3 font-medium">Check-out</th>
                       <th className="px-4 py-3 font-medium">Method</th>
@@ -257,7 +259,6 @@ export function AttendancePageClient() {
                     {historyRecords.map((record) => (
                       <tr key={record.id} className="border-b border-border last:border-0 hover:bg-muted/30">
                         <td className="px-4 py-3 font-medium text-foreground">{record.memberName}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{record.plan}</td>
                         <td className="px-4 py-3 tabular text-muted-foreground">{record.checkInTime}</td>
                         <td className="px-4 py-3 tabular text-muted-foreground">{record.checkOutTime ?? "—"}</td>
                         <td className="px-4 py-3 text-muted-foreground">{record.method}</td>
@@ -300,7 +301,7 @@ export function AttendancePageClient() {
 
         <TabsContent value="insights" className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard label="Inactive 14+ days" value={inactive14Plus.length.toString()} icon={AlertCircle} />
+            <StatCard label="Inactive 14+ days" value={(inactiveMembers?.length ?? 0).toString()} icon={AlertCircle} />
             <StatCard label="Avg. visits / member" value={avgVisitsPerMember.toString()} icon={TrendingUp} helpText="this month" />
             <StatCard label="Most active member" value={mostActive[0]?.attendanceThisMonth.toString() ?? "0"} icon={ShieldCheck} helpText={mostActive[0]?.name} />
           </div>
@@ -334,7 +335,14 @@ export function AttendancePageClient() {
                 <CardDescription>Haven&apos;t checked in recently</CardDescription>
               </CardHeader>
               <CardContent>
-                <AtRiskMembers members={members} today={TODAY} />
+                <AtRiskMembers
+                  members={(atRiskMembers ?? []).map((m) => ({
+                    id: m.memberId,
+                    name: `${m.firstName} ${m.lastName}`,
+                    initials: `${m.firstName.charAt(0)}${m.lastName.charAt(0)}`.toUpperCase(),
+                    daysSinceLastVisit: m.daysSinceLastVisit,
+                  }))}
+                />
               </CardContent>
             </Card>
           </div>
@@ -369,7 +377,7 @@ export function AttendancePageClient() {
                   </div>
                 ) : null}
 
-                <Button onClick={handleManualCheckIn} disabled={!manualMember || !!manualBlock}>
+                <Button onClick={handleManualCheckIn} loading={manualCheckIn.isPending} disabled={!manualMember || !!manualBlock}>
                   <UserCheck className="size-4" />
                   {manualAlreadyIn ? "Check In Again" : "Check In"}
                 </Button>

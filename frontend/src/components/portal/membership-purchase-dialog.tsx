@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   Check,
   CheckCircle2,
@@ -20,7 +21,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useMembership, type PaymentMethodChoice } from "@/components/portal/membership-provider";
-import { membershipPlans } from "@/lib/data/plans";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { computeNextExpiry } from "@/lib/membership-helpers";
 import { TODAY } from "@/lib/booking-helpers";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
@@ -41,9 +43,10 @@ const methodOptions: { value: PaymentMethodChoice; label: string; icon: typeof C
 export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: MembershipPurchaseDialogProps) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const { member, purchaseMembership } = useMembership();
+  const { plans: membershipPlans } = useMembershipPlans();
   const currentPlan = membershipPlans.find((p) => p.name === member.plan);
 
-  const [planId, setPlanId] = React.useState(initialPlanId ?? currentPlan?.id ?? membershipPlans[0].id);
+  const [planId, setPlanId] = React.useState(initialPlanId ?? currentPlan?.id ?? membershipPlans[0]?.id ?? "");
   const [method, setMethod] = React.useState<PaymentMethodChoice>("Card");
   const [submitting, setSubmitting] = React.useState(false);
   const [result, setResult] = React.useState<"success" | "pending" | null>(null);
@@ -67,9 +70,9 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
 
   React.useEffect(() => {
     // Intentional: reset the flow each time this dialog reopens.
-    if (open) {
+    if (open && membershipPlans.length > 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPlanId(initialPlanId ?? currentPlan?.id ?? membershipPlans[0].id);
+      setPlanId(initialPlanId ?? currentPlan?.id ?? membershipPlans[0]!.id);
       setMethod("Card");
       setResult(null);
       setCardNumber("");
@@ -77,25 +80,39 @@ export function MembershipPurchaseDialog({ open, onOpenChange, initialPlanId }: 
       setCardCvc("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialPlanId]);
+  }, [open, initialPlanId, membershipPlans.length]);
 
   const Header = isDesktop ? DialogHeader : SheetHeader;
   const Title = isDesktop ? DialogTitle : SheetTitle;
   const Description = isDesktop ? DialogDescription : SheetDescription;
   const Footer = isDesktop ? DialogFooter : SheetFooter;
 
-  const selectedPlan = membershipPlans.find((p) => p.id === planId) ?? membershipPlans[0];
+  if (membershipPlans.length === 0) {
+    return (
+      <ResponsiveDialog open={open} onOpenChange={onOpenChange} contentClassName="sm:max-w-lg">
+        <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">Loading plans…</div>
+      </ResponsiveDialog>
+    );
+  }
+
+  const selectedPlan = membershipPlans.find((p) => p.id === planId) ?? membershipPlans[0]!;
   const isSamePlan = selectedPlan.name === member.plan;
   const newExpiry = computeNextExpiry(member.expiresOn, TODAY, selectedPlan.billingPeriod);
 
-  function handleConfirm() {
+  async function handleConfirm() {
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      const outcome = purchaseMembership({ planId: selectedPlan.id, method });
+    try {
+      const outcome = await purchaseMembership({ planId: selectedPlan.id, method });
       setResult(outcome.outcome);
       setConfirmedExpiry(outcome.newExpiry ?? null);
-    }, 1000);
+    } catch (err) {
+      // The dialog stays open so the member can retry — matching every
+      // other mutation's failure behavior in this app (no silent swallow,
+      // no stack trace shown to the user).
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't complete this payment. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (

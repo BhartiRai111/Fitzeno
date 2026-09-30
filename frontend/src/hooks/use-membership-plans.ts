@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as plansApi from "@/lib/api/membership-plans";
 import { useAuth } from "@/lib/auth/auth-context";
 import type { MembershipPlan } from "@/lib/data/types";
@@ -32,4 +32,35 @@ export function useMembershipPlans() {
     isError: query.isError,
     error: query.error,
   };
+}
+
+export function useCreateMembershipPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: plansApi.CreateMembershipPlanInput) => plansApi.createMembershipPlan(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["membership-plans"] });
+    },
+  });
+}
+
+export function useUpdateMembershipPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: Partial<plansApi.CreateMembershipPlanInput> }) =>
+      plansApi.updateMembershipPlan(id, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["membership-plans"] });
+    },
+  });
+}
+
+export function useArchiveMembershipPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => plansApi.archiveMembershipPlan(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["membership-plans"] });
+    },
+  });
 }

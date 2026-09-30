@@ -22,22 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { members } from "@/lib/data/members";
+import { useMembersRoster } from "@/hooks/use-members";
+import { useRecordTransaction } from "@/hooks/use-transactions";
+import { ApiError, NetworkError } from "@/lib/api/types";
+import type { CreateTransactionInput, TransactionType, BackendPaymentMethod } from "@/lib/api/transactions";
 import { formatCurrency } from "@/lib/utils-data";
 import type { Payment, RevenueCategory } from "@/lib/data/types";
 
-export interface RecordPaymentInput {
-  memberName: string;
-  memberInitials: string;
-  amount: number;
-  method: Payment["method"];
-  category: RevenueCategory;
-  plan: string;
-}
-
 interface RecordPaymentDialogProps {
   trigger?: React.ReactNode;
-  onRecord?: (input: RecordPaymentInput) => void;
 }
 
 const categoryLabels: Record<RevenueCategory, string> = {
@@ -48,13 +41,39 @@ const categoryLabels: Record<RevenueCategory, string> = {
   Other: "Other",
 };
 
-export function RecordPaymentDialog({ trigger, onRecord }: RecordPaymentDialogProps) {
+const CATEGORY_TO_TYPE: Record<RevenueCategory, TransactionType> = {
+  Membership: "MEMBERSHIP_PURCHASE",
+  "Personal Training": "PERSONAL_TRAINING",
+  Classes: "CLASS_SESSION",
+  Retail: "STORE_SALE",
+  Other: "OTHER",
+};
+
+const METHOD_TO_BACKEND: Record<Payment["method"], BackendPaymentMethod> = {
+  Cash: "CASH",
+  Card: "CARD",
+  UPI: "UPI",
+  "Bank Transfer": "BANK_TRANSFER",
+  Online: "ONLINE",
+  Other: "OTHER",
+};
+
+export function RecordPaymentDialog({ trigger }: RecordPaymentDialogProps) {
+  const { members } = useMembersRoster();
+  const recordTransaction = useRecordTransaction();
   const [open, setOpen] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
   const [memberId, setMemberId] = React.useState(members[0]?.id);
   const [amount, setAmount] = React.useState("");
   const [method, setMethod] = React.useState<Payment["method"]>("Card");
   const [category, setCategory] = React.useState<RevenueCategory>("Membership");
+
+  React.useEffect(() => {
+    if (!memberId && members.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMemberId(members[0]!.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members.length]);
 
   function resetForm() {
     setMemberId(members[0]?.id);
@@ -63,29 +82,30 @@ export function RecordPaymentDialog({ trigger, onRecord }: RecordPaymentDialogPr
     setCategory("Membership");
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const member = members.find((m) => m.id === memberId);
     if (!member) return;
     const numericAmount = Number(amount) || 0;
 
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    const input: CreateTransactionInput = {
+      memberId: member.id,
+      type: CATEGORY_TO_TYPE[category],
+      description: category === "Membership" ? member.plan : categoryLabels[category],
+      amount: numericAmount,
+      method: METHOD_TO_BACKEND[method],
+    };
+
+    try {
+      await recordTransaction.mutateAsync(input);
       setOpen(false);
-      onRecord?.({
-        memberName: member.name,
-        memberInitials: member.initials,
-        amount: numericAmount,
-        method,
-        category,
-        plan: category === "Membership" ? member.plan : categoryLabels[category],
-      });
       toast.success("Payment recorded", {
         description: `${formatCurrency(numericAmount)} logged for ${member.name}.`,
       });
       resetForm();
-    }, 700);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't record this payment. Please try again.");
+    }
   }
 
   return (
@@ -167,7 +187,7 @@ export function RecordPaymentDialog({ trigger, onRecord }: RecordPaymentDialogPr
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" loading={submitting}>
+            <Button type="submit" loading={recordTransaction.isPending} disabled={!memberId}>
               Record Payment
             </Button>
           </DialogFooter>

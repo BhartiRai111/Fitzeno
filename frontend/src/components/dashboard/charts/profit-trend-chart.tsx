@@ -1,15 +1,23 @@
 "use client";
 
 import { Bar, ComposedChart, Line, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { revenueByMonth } from "@/lib/data/payments";
-import { expensesByMonth } from "@/lib/data/expenses";
 
-const data = revenueByMonth.map((r, i) => {
-  const expenses = expensesByMonth[i]?.expenses ?? 0;
-  return { month: r.month, revenue: r.revenue, expenses, net: r.revenue - expenses };
-});
+export interface ProfitTrendPoint {
+  month: string;
+  revenue: number;
+  expenses: number;
+  net: number;
+}
 
-export function ProfitTrendChart() {
+function monthLabel(month: string): string {
+  // "YYYY-MM" -> "Jan"
+  const [year, m] = month.split("-");
+  if (!year || !m) return month;
+  return new Date(Number(year), Number(m) - 1, 1).toLocaleDateString("en-GB", { month: "short" });
+}
+
+export function ProfitTrendChart({ data: rawData }: { data: ProfitTrendPoint[] }) {
+  const data = rawData.map((d) => ({ ...d, month: monthLabel(d.month) }));
   const max = Math.max(...data.map((d) => d.revenue), 1);
   const useThousands = max >= 2000;
   const formatValue = (value: number) =>
