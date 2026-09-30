@@ -61,8 +61,8 @@ export function RescheduleClassDialog({ booking, open, onOpenChange }: Reschedul
                 return (
                   <button
                     key={gymClass.id}
-                    onClick={() => {
-                      rescheduleClassBooking(booking.id, gymClass.id);
+                    onClick={async () => {
+                      await rescheduleClassBooking(booking.id, gymClass.id);
                       onOpenChange(false);
                     }}
                     className="flex w-full items-center justify-between gap-3 rounded-md border border-border p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/40"
@@ -71,7 +71,7 @@ export function RescheduleClassDialog({ booking, open, onOpenChange }: Reschedul
                       <p className="truncate text-sm font-medium text-foreground">{gymClass.name}</p>
                       <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Clock className="size-3.5" />
-                        {formatOccurrence(gymClass.day)} · {gymClass.startTime} · with {trainer?.name}
+                        {formatOccurrence(gymClass.day, undefined, gymClass.date)} · {gymClass.startTime} · with {trainer?.name}
                       </p>
                       <div className="mt-2 max-w-40">
                         <CapacityBar booked={gymClass.booked} capacity={gymClass.capacity} />

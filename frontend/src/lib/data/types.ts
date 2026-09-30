@@ -55,9 +55,12 @@ export interface MembershipPlan {
 export interface GymClass {
   id: string;
   name: string;
-  type: "HIIT" | "Yoga" | "Strength" | "Spin" | "Boxing" | "Mobility" | "Pilates";
+  /** Free text in the real backend (e.g. "HIIT", "Yoga") — no longer a fixed union once sourced from a real class series/occurrence. */
+  type: string;
   trainerId: string;
   day: "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+  /** The occurrence's real calendar date (ISO) — present when sourced from a real, dated ClassOccurrence rather than a purely weekly-recurring mock entry. */
+  date?: string;
   startTime: string;
   duration: number;
   capacity: number;

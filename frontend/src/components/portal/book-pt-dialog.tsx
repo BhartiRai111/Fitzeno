@@ -17,8 +17,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmptyState } from "@/components/shared/empty-state";
 import { CalendarX2 } from "lucide-react";
 import { useBookings } from "@/components/portal/bookings-provider";
+import { useAvailableSlots } from "@/hooks/use-pt-sessions";
 import { trainers } from "@/lib/data/trainers";
-import { getTrainerFreeSlots, formatOccurrence, type FreeSlot } from "@/lib/booking-helpers";
 import { formatDate } from "@/lib/utils-data";
 
 interface BookPtDialogProps {
@@ -27,27 +27,44 @@ interface BookPtDialogProps {
   preselectedTrainerId?: string;
 }
 
+function nextDays(count: number): string[] {
+  const days: string[] = [];
+  const cursor = new Date();
+  for (let i = 0; i < count; i++) {
+    days.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+}
+
+const DATE_OPTIONS = nextDays(7);
+
 export function BookPtDialog({ open, onOpenChange, preselectedTrainerId }: BookPtDialogProps) {
-  const { classes, ptSessions, bookPt } = useBookings();
+  const { bookPt } = useBookings();
   const [trainerId, setTrainerId] = React.useState<string | null>(preselectedTrainerId ?? null);
-  const [confirmedSlot, setConfirmedSlot] = React.useState<FreeSlot | null>(null);
+  const [date, setDate] = React.useState(DATE_OPTIONS[0]!);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [confirmedSlot, setConfirmedSlot] = React.useState<{ startTime: string; date: string } | null>(null);
 
   React.useEffect(() => {
-    // Intentional: reset trainer/slot selection each time this dialog is reopened.
+    // Intentional: reset trainer/date/slot selection each time this dialog is reopened.
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setTrainerId(preselectedTrainerId ?? null);
+      setDate(DATE_OPTIONS[0]!);
       setConfirmedSlot(null);
     }
   }, [open, preselectedTrainerId]);
 
   const trainer = trainerId ? trainers.find((t) => t.id === trainerId) : null;
-  const freeSlots = trainerId ? getTrainerFreeSlots(classes, ptSessions, trainerId) : [];
+  const { slots: freeSlots, isLoading: slotsLoading } = useAvailableSlots(trainerId, date);
 
-  function handleConfirm(slot: FreeSlot) {
+  async function handleConfirm(slot: { startTime: string; endTime: string }) {
     if (!trainerId) return;
-    const ok = bookPt({ trainerId, day: slot.day, occurrenceDate: slot.occurrenceDate, startTime: slot.startTime, duration: 45 });
-    if (ok) setConfirmedSlot(slot);
+    setSubmitting(true);
+    const ok = await bookPt({ trainerId, date, startTime: slot.startTime, duration: 45 });
+    setSubmitting(false);
+    if (ok) setConfirmedSlot({ startTime: slot.startTime, date });
   }
 
   return (
@@ -61,7 +78,7 @@ export function BookPtDialog({ open, onOpenChange, preselectedTrainerId }: BookP
             <div>
               <p className="font-display text-lg font-semibold text-foreground">Session booked!</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                with {trainer.name} · {formatDate(confirmedSlot.occurrenceDate)} · {confirmedSlot.startTime}
+                with {trainer.name} · {formatDate(confirmedSlot.date)} · {confirmedSlot.startTime}
               </p>
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row">
@@ -90,26 +107,44 @@ export function BookPtDialog({ open, onOpenChange, preselectedTrainerId }: BookP
                 </Button>
               )}
               <DialogTitle>Book with {trainer.name}</DialogTitle>
-              <DialogDescription>Pick an available time — sessions run 45 minutes.</DialogDescription>
+              <DialogDescription>Pick a day and an available time — sessions run 45 minutes.</DialogDescription>
             </DialogHeader>
-            {freeSlots.length === 0 ? (
+
+            <div className="flex flex-wrap gap-1.5">
+              {DATE_OPTIONS.map((d) => (
+                <Button
+                  key={d}
+                  size="sm"
+                  variant={date === d ? "primary" : "outline"}
+                  className="rounded-full"
+                  onClick={() => setDate(d)}
+                >
+                  {new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}
+                </Button>
+              ))}
+            </div>
+
+            {slotsLoading ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">Loading available times…</p>
+            ) : freeSlots.length === 0 ? (
               <EmptyState
                 icon={CalendarX2}
-                title="No open slots this week"
-                description={`${trainer.name} is fully booked — try again next week or choose a different trainer.`}
+                title="No open slots this day"
+                description={`${trainer.name} is fully booked — try another day or choose a different trainer.`}
               />
             ) : (
               <ScrollArea className="max-h-96 -mx-1 px-1">
                 <div className="space-y-2">
                   {freeSlots.map((slot) => (
                     <button
-                      key={`${slot.occurrenceDate}-${slot.startTime}`}
+                      key={`${date}-${slot.startTime}`}
+                      disabled={submitting}
                       onClick={() => handleConfirm(slot)}
-                      className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/40"
+                      className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/40 disabled:opacity-50"
                     >
                       <span className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <Clock className="size-4 text-muted-foreground" />
-                        {formatOccurrence(slot.day)}, {slot.startTime}–{slot.endTime}
+                        {formatDate(date)}, {slot.startTime}–{slot.endTime}
                       </span>
                       <Badge variant="primary">Book</Badge>
                     </button>

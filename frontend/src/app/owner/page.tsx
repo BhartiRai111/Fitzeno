@@ -43,6 +43,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { useMembersRoster } from "@/hooks/use-members";
 import { useLeadsRoster } from "@/hooks/use-leads";
 import { useTransactionsRoster, useTransactionStats, useTransactionCount } from "@/hooks/use-transactions";
+import { useInactiveMembers } from "@/hooks/use-attendance";
 import { gymClasses } from "@/lib/data/classes";
 import { attendanceRecords, weeklyAttendance } from "@/lib/data/attendance";
 import { classBookings } from "@/lib/data/class-bookings";
@@ -66,6 +67,7 @@ export default function OwnerOverviewPage() {
   const { members, isLoading: membersLoading } = useMembersRoster();
   const { leads, isLoading: leadsLoading } = useLeadsRoster();
   const { payments: recentTx } = useTransactionsRoster();
+  const { data: inactiveMembers } = useInactiveMembers(7);
 
   const now = new Date();
   const todayIso = isoDate(now);
@@ -417,7 +419,14 @@ export default function OwnerOverviewPage() {
             <CardDescription>Haven&apos;t checked in recently</CardDescription>
           </CardHeader>
           <CardContent>
-            <AtRiskMembers members={members} today={todayIso} />
+            <AtRiskMembers
+              members={(inactiveMembers ?? []).map((m) => ({
+                id: m.memberId,
+                name: `${m.firstName} ${m.lastName}`,
+                initials: `${m.firstName.charAt(0)}${m.lastName.charAt(0)}`.toUpperCase(),
+                daysSinceLastVisit: m.daysSinceLastVisit,
+              }))}
+            />
           </CardContent>
         </Card>
       </div>

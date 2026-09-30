@@ -192,6 +192,46 @@ export function useUnfreezeMembership() {
   });
 }
 
+/** The caller's own member profile + current membership — the real-data replacement for MembershipProvider's mock member. */
+export function useOwnMemberAndMembership() {
+  const { status } = useAuth();
+  const enabled = status === "authenticated";
+
+  const memberQuery = useQuery({
+    queryKey: ["members", "me"],
+    queryFn: () => membersApi.fetchOwnMemberProfile(),
+    enabled,
+    staleTime: 30_000,
+  });
+
+  const membershipQuery = useQuery({
+    queryKey: ["memberships", "me"],
+    queryFn: () => membershipsApi.fetchOwnCurrentMembership(),
+    enabled,
+    staleTime: 30_000,
+  });
+
+  const member = memberQuery.data ? toLegacyMemberDetail(memberQuery.data, membershipQuery.data ?? undefined) : undefined;
+
+  return {
+    member,
+    membership: membershipQuery.data ?? null,
+    isLoading: memberQuery.isLoading || membershipQuery.isLoading,
+    isError: memberQuery.isError || membershipQuery.isError,
+  };
+}
+
+export function usePurchaseOwnMembership() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: membershipsApi.PurchaseMembershipInput) => membershipsApi.purchaseOrRenewOwnMembership(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["memberships", "me"] });
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+    },
+  });
+}
+
 export function useCancelMembership() {
   const queryClient = useQueryClient();
   return useMutation({

@@ -16,28 +16,76 @@ import { CapacityBar } from "@/components/shared/capacity-bar";
 import { WeekCalendar } from "@/components/dashboard/week-calendar";
 import { ClassDialog } from "@/components/dashboard/dialogs/class-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
-import { gymClasses } from "@/lib/data/classes";
-import { classBookings } from "@/lib/data/class-bookings";
+import { useClassSeriesRoster, useClassOccurrences } from "@/hooks/use-classes";
+import { useClassBookingsRoster, useCancelClassBooking, usePromoteClassBooking } from "@/hooks/use-class-bookings";
+import { toInitials } from "@/lib/api/enum-maps";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { trainers } from "@/lib/data/trainers";
 import { formatDate } from "@/lib/utils-data";
 
 type TabValue = "calendar" | "classes" | "bookings" | "waitlist";
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
+}
 
 export function ClassesPageClient() {
   const searchParams = useSearchParams();
   const initialTab = (searchParams.get("tab") as TabValue) ?? "calendar";
   const [tab, setTab] = React.useState<TabValue>(initialTab);
 
-  const waitlisted = classBookings.filter((b) => b.status === "waitlisted");
-  const waitlistByClass = gymClasses
-    .map((c) => ({ gymClass: c, entries: waitlisted.filter((w) => w.classId === c.id) }))
-    .filter((g) => g.entries.length > 0);
+  const todayIso = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const weekEndIso = React.useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 6);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const twoWeekEndIso = React.useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 13);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
+  const { series, classes: seriesAsClasses, isLoading: seriesLoading } = useClassSeriesRoster();
+  const { classes: weekOccurrences } = useClassOccurrences({ from: todayIso, to: weekEndIso });
+  const { classes: twoWeekOccurrences } = useClassOccurrences({ from: todayIso, to: twoWeekEndIso });
+  const { raw: bookings, isLoading: bookingsLoading } = useClassBookingsRoster({ limit: 200 });
+
+  const cancelBooking = useCancelClassBooking();
+  const promoteBooking = usePromoteClassBooking();
+
+  const classesWithCapacity = seriesAsClasses.map((c) => {
+    const upcoming = weekOccurrences.find((o) => o.name === c.name && o.trainerId === c.trainerId && o.day === c.day);
+    return upcoming ? { ...c, booked: upcoming.booked, capacity: upcoming.capacity } : c;
+  });
+
+  const waitlisted = bookings.filter((b) => b.status === "WAITLISTED");
+  const waitlistByOccurrence = new Map<string, typeof waitlisted>();
+  for (const w of waitlisted) {
+    const list = waitlistByOccurrence.get(w.classOccurrence.id) ?? [];
+    list.push(w);
+    waitlistByOccurrence.set(w.classOccurrence.id, list);
+  }
+
+  function handleCancelBooking(id: string, memberName: string) {
+    cancelBooking.mutate(id, {
+      onSuccess: () => toast.success(`${memberName}'s booking cancelled`),
+      onError: (err) => toast.error(errorMessage(err, "Couldn't cancel this booking. Please try again.")),
+    });
+  }
+
+  function handlePromote(id: string, memberName: string) {
+    promoteBooking.mutate(id, {
+      onSuccess: () => toast.success(`${memberName} promoted to booked`),
+      onError: (err) => toast.error(errorMessage(err, "Couldn't promote this booking. Please try again.")),
+    });
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Classes & Schedule"
-        description={`${gymClasses.length} classes running weekly`}
+        description={`${series.length} classes running weekly`}
         actions={<ClassDialog />}
       />
 
@@ -46,57 +94,63 @@ export function ClassesPageClient() {
           <TabsTrigger value="calendar">Calendar</TabsTrigger>
           <TabsTrigger value="classes">Classes</TabsTrigger>
           <TabsTrigger value="bookings">Bookings</TabsTrigger>
-          <TabsTrigger value="waitlist">Waitlist ({waitlistByClass.length})</TabsTrigger>
+          <TabsTrigger value="waitlist">Waitlist ({waitlistByOccurrence.size})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="calendar">
           <Card className="p-4 sm:p-5">
-            <WeekCalendar classes={gymClasses} />
+            <WeekCalendar classes={weekOccurrences} />
           </Card>
         </TabsContent>
 
         <TabsContent value="classes">
-          <Card className="overflow-hidden p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                    <th className="px-4 py-3 font-medium">Class</th>
-                    <th className="px-4 py-3 font-medium">Trainer</th>
-                    <th className="px-4 py-3 font-medium">Day</th>
-                    <th className="px-4 py-3 font-medium">Time</th>
-                    <th className="px-4 py-3 font-medium">Location</th>
-                    <th className="px-4 py-3 font-medium">Capacity</th>
-                    <th className="px-4 py-3 font-medium" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {gymClasses.map((gymClass) => {
-                    const trainer = trainers.find((t) => t.id === gymClass.trainerId);
-                    return (
-                      <tr key={gymClass.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                        <td className="px-4 py-3 font-medium text-foreground">{gymClass.name}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{trainer?.name}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{gymClass.day}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{gymClass.startTime}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{gymClass.location}</td>
-                        <td className="px-4 py-3">
-                          <div className="w-32"><CapacityBar booked={gymClass.booked} capacity={gymClass.capacity} /></div>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <ClassDialog gymClass={gymClass} trigger={<Button size="sm" variant="ghost">Edit</Button>} />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card>
+          {seriesLoading ? (
+            <p className="text-sm text-muted-foreground">Loading classes…</p>
+          ) : (
+            <Card className="overflow-hidden p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-3 font-medium">Class</th>
+                      <th className="px-4 py-3 font-medium">Trainer</th>
+                      <th className="px-4 py-3 font-medium">Day</th>
+                      <th className="px-4 py-3 font-medium">Time</th>
+                      <th className="px-4 py-3 font-medium">Location</th>
+                      <th className="px-4 py-3 font-medium">Capacity</th>
+                      <th className="px-4 py-3 font-medium" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {classesWithCapacity.map((gymClass) => {
+                      const trainer = trainers.find((t) => t.id === gymClass.trainerId);
+                      return (
+                        <tr key={gymClass.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                          <td className="px-4 py-3 font-medium text-foreground">{gymClass.name}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{trainer?.name}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{gymClass.day}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{gymClass.startTime}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{gymClass.location}</td>
+                          <td className="px-4 py-3">
+                            <div className="w-32"><CapacityBar booked={gymClass.booked} capacity={gymClass.capacity} /></div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <ClassDialog gymClass={gymClass} trigger={<Button size="sm" variant="ghost">Edit</Button>} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="bookings">
-          {classBookings.length === 0 ? (
+          {bookingsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading bookings…</p>
+          ) : bookings.length === 0 ? (
             <EmptyState icon={CalendarX2} title="No bookings yet" description="Class bookings will appear here." />
           ) : (
             <Card className="overflow-hidden p-0">
@@ -112,30 +166,34 @@ export function ClassesPageClient() {
                     </tr>
                   </thead>
                   <tbody>
-                    {classBookings.map((booking) => {
-                      const gymClass = gymClasses.find((c) => c.id === booking.classId);
+                    {bookings.map((booking) => {
+                      const memberName = `${booking.member.firstName} ${booking.member.lastName}`;
                       return (
                         <tr key={booking.id} className="border-b border-border last:border-0 hover:bg-muted/30">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2.5">
                               <Avatar className="size-8">
-                                <AvatarFallback className="text-xs">{booking.memberInitials}</AvatarFallback>
+                                <AvatarFallback className="text-xs">{toInitials(booking.member.firstName, booking.member.lastName)}</AvatarFallback>
                               </Avatar>
-                              <span className="font-medium text-foreground">{booking.memberName}</span>
+                              <span className="font-medium text-foreground">{memberName}</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-muted-foreground">{gymClass?.name}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{formatDate(booking.bookedOn)}</td>
-                          <td className="px-4 py-3"><BookingStatusBadge status={booking.status} /></td>
+                          <td className="px-4 py-3 text-muted-foreground">{booking.classOccurrence.name}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{formatDate(booking.bookedAt.slice(0, 10))}</td>
+                          <td className="px-4 py-3">
+                            <BookingStatusBadge
+                              status={booking.status === "CONFIRMED" ? "booked" : booking.status === "WAITLISTED" ? "waitlisted" : booking.status === "ATTENDED" ? "attended" : booking.status === "NO_SHOW" ? "no-show" : "cancelled"}
+                            />
+                          </td>
                           <td className="px-4 py-3 text-right">
-                            {(booking.status === "booked" || booking.status === "waitlisted") && (
+                            {(booking.status === "CONFIRMED" || booking.status === "WAITLISTED") && (
                               <ConfirmActionDialog
                                 trigger={<Button size="sm" variant="ghost" className="text-destructive">Cancel</Button>}
-                                title={`Cancel ${booking.memberName}'s booking?`}
-                                description={`They'll be removed from ${gymClass?.name ?? "this class"} and notified.`}
+                                title={`Cancel ${memberName}'s booking?`}
+                                description={`They'll be removed from ${booking.classOccurrence.name} and notified.`}
                                 confirmLabel="Cancel Booking"
                                 destructive
-                                onConfirm={() => toast.success(`${booking.memberName}'s booking cancelled`)}
+                                onConfirm={() => handleCancelBooking(booking.id, memberName)}
                               />
                             )}
                           </td>
@@ -150,40 +208,50 @@ export function ClassesPageClient() {
         </TabsContent>
 
         <TabsContent value="waitlist" className="space-y-4">
-          {waitlistByClass.length === 0 ? (
+          {waitlistByOccurrence.size === 0 ? (
             <EmptyState icon={ListX} title="No one on the waitlist" description="Classes without free spots will show their waitlist here." />
           ) : (
-            waitlistByClass.map(({ gymClass, entries }) => (
-              <Card key={gymClass.id}>
-                <div className="flex items-center justify-between border-b border-border p-4">
-                  <div>
-                    <p className="font-medium text-foreground">{gymClass.name}</p>
-                    <p className="text-xs text-muted-foreground">{gymClass.day} · {gymClass.startTime} · {gymClass.booked}/{gymClass.capacity} booked</p>
-                  </div>
-                  <Badge variant="warning">{entries.length} waiting</Badge>
-                </div>
-                <div className="p-2">
-                  {entries.map((entry, i) => (
-                    <div key={entry.id} className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-muted/40">
-                      <div className="flex items-center gap-2.5">
-                        <span className="w-5 text-center text-xs font-medium text-muted-foreground">{i + 1}</span>
-                        <Avatar className="size-8">
-                          <AvatarFallback className="text-xs">{entry.memberInitials}</AvatarFallback>
-                        </Avatar>
-                        <span className="text-sm font-medium text-foreground">{entry.memberName}</span>
-                      </div>
-                      <ConfirmActionDialog
-                        trigger={<Button size="sm" variant="outline">Promote to Booked</Button>}
-                        title={`Promote ${entry.memberName}?`}
-                        description={`They'll be moved from the waitlist into a confirmed spot for ${gymClass.name}.`}
-                        confirmLabel="Promote"
-                        onConfirm={() => toast.success(`${entry.memberName} promoted to booked`)}
-                      />
+            [...waitlistByOccurrence.entries()].map(([occurrenceId, entries]) => {
+              const occurrence = twoWeekOccurrences.find((o) => o.id === occurrenceId);
+              const summary = entries[0]!.classOccurrence;
+              return (
+                <Card key={occurrenceId}>
+                  <div className="flex items-center justify-between border-b border-border p-4">
+                    <div>
+                      <p className="font-medium text-foreground">{summary.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDate(summary.date.slice(0, 10))} · {summary.startTime}
+                        {occurrence ? ` · ${occurrence.booked}/${occurrence.capacity} booked` : ""}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              </Card>
-            ))
+                    <Badge variant="warning">{entries.length} waiting</Badge>
+                  </div>
+                  <div className="p-2">
+                    {entries.map((entry, i) => {
+                      const memberName = `${entry.member.firstName} ${entry.member.lastName}`;
+                      return (
+                        <div key={entry.id} className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-muted/40">
+                          <div className="flex items-center gap-2.5">
+                            <span className="w-5 text-center text-xs font-medium text-muted-foreground">{i + 1}</span>
+                            <Avatar className="size-8">
+                              <AvatarFallback className="text-xs">{toInitials(entry.member.firstName, entry.member.lastName)}</AvatarFallback>
+                            </Avatar>
+                            <span className="text-sm font-medium text-foreground">{memberName}</span>
+                          </div>
+                          <ConfirmActionDialog
+                            trigger={<Button size="sm" variant="outline">Promote to Booked</Button>}
+                            title={`Promote ${memberName}?`}
+                            description={`They'll be moved from the waitlist into a confirmed spot for ${summary.name}.`}
+                            confirmLabel="Promote"
+                            onConfirm={() => handlePromote(entry.id, memberName)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              );
+            })
           )}
         </TabsContent>
       </Tabs>

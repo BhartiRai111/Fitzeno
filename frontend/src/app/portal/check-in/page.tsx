@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   CheckCircle2,
   QrCode,
@@ -22,49 +23,71 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { useMembership } from "@/components/portal/membership-provider";
-import { attendanceRecords } from "@/lib/data/attendance";
+import { useOwnAttendanceStatus, useOwnAttendanceHistory, useCheckInSelf, useCheckOutSelf } from "@/hooks/use-attendance";
 import { gymProfile } from "@/lib/data/gym";
-import {
-  DEMO_MEMBER_ID,
-  TODAY,
-  getMemberRecords,
-  getVisitsInMonth,
-  getCurrentStreak,
-  getGymOpenState,
-  nowTimeLabel,
-  minutesBetween,
-} from "@/lib/attendance-helpers";
+import { getMemberRecords, getVisitsInMonth, getCurrentStreak, getGymOpenState, minutesBetween } from "@/lib/attendance-helpers";
 import { formatDate } from "@/lib/utils-data";
+import { ApiError, NetworkError } from "@/lib/api/types";
 
 type FlowState = "idle" | "success" | "checked-out";
 
+function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
 export default function CheckInPage() {
   const { member, membershipBlock } = useMembership();
-  const records = getMemberRecords(attendanceRecords, DEMO_MEMBER_ID);
-  const streak = getCurrentStreak(attendanceRecords, DEMO_MEMBER_ID);
-  const visitsThisMonth = getVisitsInMonth(attendanceRecords, DEMO_MEMBER_ID);
-  const priorVisitToday = records.find((r) => r.date === TODAY);
+  const { data: status } = useOwnAttendanceStatus();
+  const { records: history } = useOwnAttendanceHistory();
+  const checkInSelf = useCheckInSelf();
+  const checkOutSelf = useCheckOutSelf();
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const records = getMemberRecords(history, member.id);
+  const streak = getCurrentStreak(history, member.id, todayIso);
+  const visitsThisMonth = getVisitsInMonth(history, member.id, todayIso.slice(0, 7));
+  const priorVisitToday = records.find((r) => r.date === todayIso);
   const gymOpen = getGymOpenState();
 
   const [flow, setFlow] = React.useState<FlowState>("idle");
-  const [submitting, setSubmitting] = React.useState(false);
   const [checkInTime, setCheckInTime] = React.useState<string | null>(null);
   const [checkOutTime, setCheckOutTime] = React.useState<string | null>(null);
+  const syncedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!syncedRef.current && status?.checkedIn && status.checkIn) {
+      syncedRef.current = true;
+      setCheckInTime(timeLabel(status.checkIn.checkInAt));
+      setFlow("success");
+    }
+  }, [status]);
 
   const visitNumber = visitsThisMonth + (flow === "idle" ? 0 : 1);
 
-  function handleScan() {
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      setCheckInTime(nowTimeLabel());
+  async function handleScan() {
+    try {
+      const attempt = await checkInSelf.mutateAsync();
+      if (attempt.outcome === "DENIED") {
+        toast.error(attempt.message);
+        return;
+      }
+      if (attempt.checkIn) {
+        setCheckInTime(timeLabel(attempt.checkIn.checkInAt));
+      }
       setFlow("success");
-    }, 900);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't check you in. Please try again.");
+    }
   }
 
-  function handleCheckOut() {
-    setCheckOutTime(nowTimeLabel());
-    setFlow("checked-out");
+  async function handleCheckOut() {
+    try {
+      const result = await checkOutSelf.mutateAsync();
+      if (result.checkOutAt) setCheckOutTime(timeLabel(result.checkOutAt));
+      setFlow("checked-out");
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't check you out. Please try again.");
+    }
   }
 
   function handleReset() {
@@ -134,7 +157,7 @@ export default function CheckInPage() {
               Visit #{visitNumber} this month
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row">
-              <Button variant="outline" className="flex-1" onClick={handleCheckOut}>
+              <Button variant="outline" className="flex-1" loading={checkOutSelf.isPending} onClick={handleCheckOut}>
                 <LogOut className="size-4" />
                 Check Out
               </Button>
@@ -185,8 +208,8 @@ export default function CheckInPage() {
               <p className="font-display text-base font-semibold text-foreground">{member.name}</p>
               <p className="text-sm text-muted-foreground">{member.plan} Plan · Active</p>
             </div>
-            <Button className="w-full" loading={submitting} onClick={handleScan}>
-              {submitting ? "Scanning..." : "Simulate scan & check in"}
+            <Button className="w-full" loading={checkInSelf.isPending} onClick={handleScan}>
+              {checkInSelf.isPending ? "Scanning..." : "Simulate scan & check in"}
             </Button>
           </>
         )}

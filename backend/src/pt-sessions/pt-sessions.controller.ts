@@ -10,6 +10,7 @@ import { CreatePtSessionDto, CreatePtSessionForMemberDto } from './dto/create-pt
 import { ReschedulePtSessionDto } from './dto/reschedule-pt-session.dto.js';
 import { ListPtSessionsQueryDto } from './dto/list-pt-sessions-query.dto.js';
 import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto.js';
+import { MarkPtAttendanceDto } from './dto/mark-attendance.dto.js';
 
 @ApiTags('pt-sessions')
 @ApiBearerAuth()
@@ -80,5 +81,15 @@ export class PtSessionsController {
   @ApiOperation({ summary: "Cancel any member's session (staff override — no cancellation-window restriction)." })
   cancel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.ptSessionsService.cancel(user.tenantId, id);
+  }
+
+  @Post(':id/attendance')
+  @RequirePermission(PermissionArea.ATTENDANCE, PermissionLevel.MANAGE)
+  @ApiOperation({
+    summary: "Record (or correct) a personal training session's attendance outcome.",
+    description: 'A TRAINER can only mark attendance for their own sessions.',
+  })
+  markAttendance(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: MarkPtAttendanceDto) {
+    return this.ptSessionsService.markAttendance(user.tenantId, id, dto.status, { id: user.id, role: user.role });
   }
 }

@@ -30,6 +30,9 @@ import { PtSessionsModule } from './pt-sessions/pt-sessions.module.js';
 import { MembershipPlansModule } from './membership-plans/membership-plans.module.js';
 import { MembershipsModule } from './memberships/memberships.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
+import { AttendanceModule } from './attendance/attendance.module.js';
+import { ExpensesModule } from './expenses/expenses.module.js';
+import { FinanceModule } from './finance/finance.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 
 @Module({
@@ -74,6 +77,9 @@ import { NotificationsModule } from './notifications/notifications.module.js';
     MembershipPlansModule,
     MembershipsModule,
     PaymentsModule,
+    AttendanceModule,
+    ExpensesModule,
+    FinanceModule,
     NotificationsModule,
     HealthModule,
   ],

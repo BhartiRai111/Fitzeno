@@ -21,14 +21,13 @@ import {
 } from "@/components/ui/select";
 import { StatCard } from "@/components/shared/stat-card";
 import { PaymentStatusBadge } from "@/components/shared/status-badge";
-import { RecordPaymentDialog, type RecordPaymentInput } from "@/components/dashboard/dialogs/record-payment-dialog";
+import { RecordPaymentDialog } from "@/components/dashboard/dialogs/record-payment-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { InvoiceDialog } from "@/components/dashboard/dialogs/invoice-dialog";
-import { payments as initialPayments, revenueByMonth } from "@/lib/data/payments";
+import { useTransactionsRoster, useTransactionStats, useRefundTransaction } from "@/hooks/use-transactions";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
 import type { Payment } from "@/lib/data/types";
-
-const TODAY = "2026-09-21";
 
 type TabValue = "transactions" | "pending" | "membership" | "refunds" | "invoices";
 
@@ -107,32 +106,35 @@ export function PaymentsPageClient() {
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("all");
-  const [payments, setPayments] = React.useState<Payment[]>(initialPayments);
 
-  function handleRecord(input: RecordPaymentInput) {
-    const newPayment: Payment = {
-      id: `p-${Date.now()}`,
-      invoiceId: `INV-${10300 + payments.length}`,
-      date: TODAY,
-      status: "paid",
-      ...input,
-    };
-    setPayments((prev) => [newPayment, ...prev]);
-  }
+  const { payments, isLoading, isError } = useTransactionsRoster();
+  const { data: stats } = useTransactionStats();
+  const refundTransaction = useRefundTransaction();
 
   function handleRefund(paymentId: string) {
     const payment = payments.find((p) => p.id === paymentId);
     if (!payment) return;
-    setPayments((prev) => prev.map((p) => (p.id === paymentId ? { ...p, status: "refunded" } : p)));
-    toast.success(`Refund issued for ${payment.invoiceId}`, {
-      description: `${formatCurrency(payment.amount)} returned to ${payment.memberName}.`,
-    });
+    refundTransaction.mutate(
+      { id: paymentId },
+      {
+        onSuccess: () => {
+          toast.success(`Refund issued for ${payment.invoiceId}`, {
+            description: `${formatCurrency(payment.amount)} returned to ${payment.memberName}.`,
+          });
+        },
+        onError: (err) => {
+          toast.error(
+            err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't issue this refund. Please try again."
+          );
+        },
+      }
+    );
   }
 
-  const totalRevenue = revenueByMonth[revenueByMonth.length - 1].revenue;
-  const pendingAmount = payments.filter((p) => p.status === "pending").reduce((s, p) => s + p.amount, 0);
-  const failedCount = payments.filter((p) => p.status === "failed").length;
-  const refundedAmount = payments.filter((p) => p.status === "refunded").reduce((s, p) => s + p.amount, 0);
+  const totalRevenue = stats?.totalRevenue ?? 0;
+  const pendingAmount = stats?.pendingAmount ?? 0;
+  const failedCount = stats?.failedCount ?? 0;
+  const refundedAmount = stats?.refundedAmount ?? 0;
 
   const searched = (rows: Payment[]) =>
     rows.filter((p) => {
@@ -147,6 +149,23 @@ export function PaymentsPageClient() {
   const refunds = searched(payments.filter((p) => p.status === "refunded"));
   const invoices = searched(payments);
 
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Payments & Billing" description="Loading…" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Payments & Billing" />
+        <EmptyState icon={Receipt} title="Couldn't load payments" description="Check your connection and refresh the page." />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -160,7 +179,7 @@ export function PaymentsPageClient() {
                 View Finances
               </Link>
             </Button>
-            <RecordPaymentDialog onRecord={handleRecord} />
+            <RecordPaymentDialog />
           </>
         }
       />

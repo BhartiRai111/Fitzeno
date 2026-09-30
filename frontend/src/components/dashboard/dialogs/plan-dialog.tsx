@@ -23,6 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCreateMembershipPlan, useUpdateMembershipPlan } from "@/hooks/use-membership-plans";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import type { MembershipPlan } from "@/lib/data/types";
 
 interface PlanDialogProps {
@@ -32,17 +34,49 @@ interface PlanDialogProps {
 
 export function PlanDialog({ plan, trigger }: PlanDialogProps) {
   const [open, setOpen] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
+  const [billingPeriod, setBillingPeriod] = React.useState<"month" | "year">(plan?.billingPeriod ?? "month");
+  const createPlan = useCreateMembershipPlan();
+  const updatePlan = useUpdateMembershipPlan();
   const isEdit = !!plan;
+  const submitting = createPlan.isPending || updatePlan.isPending;
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  React.useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBillingPeriod(plan?.billingPeriod ?? "month");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    const formData = new FormData(event.currentTarget);
+    const input = {
+      name: String(formData.get("name") ?? "").trim(),
+      price: Number(formData.get("price") ?? 0),
+      billingPeriod: billingPeriod === "year" ? ("YEAR" as const) : ("MONTH" as const),
+      description: String(formData.get("description") ?? "").trim() || undefined,
+      perks: String(formData.get("perks") ?? "")
+        .split("\n")
+        .map((p) => p.trim())
+        .filter(Boolean),
+    };
+
+    try {
+      if (isEdit) {
+        await updatePlan.mutateAsync({ id: plan.id, input });
+      } else {
+        await createPlan.mutateAsync(input);
+      }
       setOpen(false);
       toast.success(isEdit ? "Plan updated" : "Plan created");
-    }, 700);
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError || err instanceof NetworkError
+          ? err.message
+          : `Couldn't ${isEdit ? "update" : "create"} this plan. Please try again.`
+      );
+    }
   }
 
   return (
@@ -75,7 +109,7 @@ export function PlanDialog({ plan, trigger }: PlanDialogProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Billing period</Label>
-            <Select defaultValue={plan?.billingPeriod ?? "month"}>
+            <Select value={billingPeriod} onValueChange={(v) => setBillingPeriod(v as "month" | "year")}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

@@ -31,6 +31,7 @@ describe('PtSessionsService', () => {
   let prisma: PrismaService;
   let membersService: MembersService;
   let trainersService: TrainersService;
+  let eventEmitter: EventEmitter2;
   let service: PtSessionsService;
 
   beforeEach(() => {
@@ -53,7 +54,7 @@ describe('PtSessionsService', () => {
     membersService = {} as unknown as MembersService;
     trainersService = { getActiveBookableTrainer: vi.fn() } as unknown as TrainersService;
 
-    const eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
+    eventEmitter = { emit: vi.fn() } as unknown as EventEmitter2;
     service = new PtSessionsService(prisma, membersService, trainersService, eventEmitter);
   });
 
@@ -190,6 +191,78 @@ describe('PtSessionsService', () => {
       } as never);
 
       await expect(service.cancel('tenant-1', 'pt-1', { memberId: 'member-1' })).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('markAttendance', () => {
+    function makeSessionRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'pt-1',
+        tenantId: 'tenant-1',
+        trainerId: 'trainer-user-1',
+        memberId: 'member-1',
+        status: 'CONFIRMED',
+        date: FUTURE,
+        startTime: '09:00',
+        durationMinutes: 60,
+        notes: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        trainer: { id: 'trainer-user-1', firstName: 'Taylor', lastName: 'Coach' },
+        member: { id: 'member-1', firstName: 'Jordan', lastName: 'Smith' },
+        ...overrides,
+      };
+    }
+
+    it('records COMPLETED for a confirmed session', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow() as never);
+      vi.mocked(prisma.personalTrainingSession.update).mockResolvedValue(makeSessionRow({ status: 'COMPLETED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'pt-1', 'COMPLETED');
+
+      expect(result.status).toBe('COMPLETED');
+    });
+
+    it('records NO_SHOW and emits a notification event', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow() as never);
+      vi.mocked(prisma.personalTrainingSession.update).mockResolvedValue(makeSessionRow({ status: 'NO_SHOW' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'pt-1', 'NO_SHOW');
+
+      expect(result.status).toBe('NO_SHOW');
+      expect(eventEmitter.emit).toHaveBeenCalledWith('pt-session.no-show', expect.objectContaining({ memberId: 'member-1' }));
+    });
+
+    it('reverts a marked session back to CONFIRMED', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow({ status: 'NO_SHOW' }) as never);
+      vi.mocked(prisma.personalTrainingSession.update).mockResolvedValue(makeSessionRow({ status: 'CONFIRMED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'pt-1', 'CONFIRMED');
+
+      expect(result.status).toBe('CONFIRMED');
+    });
+
+    it('rejects marking attendance on a cancelled session', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow({ status: 'CANCELLED' }) as never);
+
+      await expect(service.markAttendance('tenant-1', 'pt-1', 'COMPLETED')).rejects.toThrow(BadRequestException);
+    });
+
+    it('restricts a TRAINER caller to their own sessions', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow({ trainerId: 'other-trainer' }) as never);
+
+      await expect(
+        service.markAttendance('tenant-1', 'pt-1', 'COMPLETED', { id: 'trainer-user-1', role: 'TRAINER' as never }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows a TRAINER caller to mark attendance on their own session', async () => {
+      vi.mocked(prisma.personalTrainingSession.findFirst).mockResolvedValue(makeSessionRow() as never);
+      vi.mocked(prisma.personalTrainingSession.update).mockResolvedValue(makeSessionRow({ status: 'COMPLETED' }) as never);
+
+      const result = await service.markAttendance('tenant-1', 'pt-1', 'COMPLETED', { id: 'trainer-user-1', role: 'TRAINER' as never });
+
+      expect(result.status).toBe('COMPLETED');
     });
   });
 });

@@ -24,13 +24,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 import { Logo } from "@/components/brand/logo";
 import { EmptyState } from "@/components/shared/empty-state";
-import { membershipPlans } from "@/lib/data/plans";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
+import { usePurchaseOwnMembership } from "@/hooks/use-members";
 import { offers } from "@/lib/data/testimonials";
 import { applyOfferToPrice } from "@/lib/membership-helpers";
 import { TODAY } from "@/lib/booking-helpers";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 type Method = "Card" | "UPI" | "Bank Transfer";
@@ -48,6 +51,8 @@ export function CheckoutPageClient() {
   const planId = searchParams.get("plan");
   const offerCode = searchParams.get("offer");
 
+  const { plans: membershipPlans, isLoading: plansLoading } = useMembershipPlans();
+  const purchaseMutation = usePurchaseOwnMembership();
   const plan = membershipPlans.find((p) => p.id === planId);
   const offer = offerCode ? offers.find((o) => o.code.toLowerCase() === offerCode.toLowerCase()) : undefined;
   const offerApplies = !!(offer && plan && offer.applicablePlans.includes(plan.id));
@@ -72,6 +77,14 @@ export function CheckoutPageClient() {
   const cardComplete =
     method !== "Card" || (cardNumber.replace(/\D/g, "").length === 16 && cardExpiry.length === 5 && cardCvc.length >= 3);
 
+  if (plansLoading) {
+    return (
+      <div className="w-full max-w-md">
+        <Card className="shadow-elevation-lg p-10 text-center text-sm text-muted-foreground">Loading plans…</Card>
+      </div>
+    );
+  }
+
   if (!plan) {
     return (
       <div className="w-full max-w-md">
@@ -88,14 +101,22 @@ export function CheckoutPageClient() {
     );
   }
 
+  // Promo-code discounts are cosmetic in this phase — there's no backend
+  // promotions/coupon system yet (see the README's known limitations), so
+  // the actual charge always reflects the plan's real, server-priced
+  // amount; never a client-computed discounted one.
   const price = offerApplies ? applyOfferToPrice(plan.price, offer!.discount) : plan.price;
 
-  function handleConfirm() {
+  async function handleConfirm() {
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await purchaseMutation.mutateAsync({ planId: plan!.id, paymentMethod: method === "Bank Transfer" ? "BANK_TRANSFER" : method === "UPI" ? "UPI" : "CARD" });
       setStep(method === "Bank Transfer" ? "pending" : "success");
-    }, 1000);
+    } catch (err) {
+      toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't complete this payment. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (

@@ -47,6 +47,14 @@ export interface RecordTransactionInput {
   idempotencyKey?: string;
 }
 
+export interface RevenueSummary {
+  grossRevenue: number;
+  refunds: number;
+  netRevenue: number;
+  paidCount: number;
+  revenueByType: { type: TransactionType; amount: number }[];
+}
+
 const transactionInclude = {
   member: { select: { id: true, firstName: true, lastName: true } },
   recordedByUser: { select: { id: true, firstName: true, lastName: true } },
@@ -405,6 +413,73 @@ export class TransactionsService {
       refundedAmount: Number(refundedAgg._sum.amount ?? 0),
       revenueByType: byType.map((row) => ({ type: row.type, amount: Number(row._sum.amount ?? 0) })),
       revenueByMethod: byMethod.map((row) => ({ method: row.method, amount: Number(row._sum.amount ?? 0) })),
+    };
+  }
+
+  /**
+   * The revenue side of the Finance module's "revenue vs. expenses vs. net
+   * result" view (see FinanceService) — added alongside `getStats` rather
+   * than replacing it, since `getStats` has its own established contract
+   * other callers already rely on. This method exists because `getStats`'s
+   * `totalRevenue` (status = PAID only, filtered by `createdAt`) silently
+   * drops any transaction that has since been partially or fully refunded
+   * — fine for a payments-list summary, but wrong for a P&L figure: a
+   * transaction that was paid and later partially refunded is still real
+   * gross revenue, just partially given back. This method instead sums
+   * every SETTLED transaction (PAID, PARTIALLY_REFUNDED, REFUNDED — never
+   * PENDING/PROCESSING/FAILED/CANCELLED, which were never actually
+   * received) by `paidAt` (the date money actually changed hands, not
+   * `createdAt`), and nets out actual `Refund` rows by their own
+   * `completedAt` — giving Finance a `grossRevenue`/`refunds`/`netRevenue`
+   * triad that's internally consistent for any date range.
+   */
+  async getRevenueSummary(tenantId: string, range?: { from?: string; to?: string }): Promise<RevenueSummary> {
+    const paidAtWhere =
+      range?.from || range?.to
+        ? {
+            paidAt: {
+              ...(range.from ? { gte: new Date(range.from) } : {}),
+              ...(range.to ? { lte: new Date(`${range.to}T23:59:59.999Z`) } : {}),
+            },
+          }
+        : {};
+    const completedAtWhere =
+      range?.from || range?.to
+        ? {
+            completedAt: {
+              ...(range.from ? { gte: new Date(range.from) } : {}),
+              ...(range.to ? { lte: new Date(`${range.to}T23:59:59.999Z`) } : {}),
+            },
+          }
+        : {};
+    const settledStatuses = [TransactionStatus.PAID, TransactionStatus.PARTIALLY_REFUNDED, TransactionStatus.REFUNDED];
+
+    const [grossAgg, byType, refundAgg] = await Promise.all([
+      this.prisma.transaction.aggregate({
+        where: { tenantId, status: { in: settledStatuses }, ...paidAtWhere },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.transaction.groupBy({
+        by: ['type'],
+        where: { tenantId, status: { in: settledStatuses }, ...paidAtWhere },
+        _sum: { amount: true },
+      }),
+      this.prisma.refund.aggregate({
+        where: { tenantId, status: RefundStatus.COMPLETED, ...completedAtWhere },
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const grossRevenue = Number(grossAgg._sum.amount ?? 0);
+    const refunds = Number(refundAgg._sum.amount ?? 0);
+
+    return {
+      grossRevenue,
+      refunds,
+      netRevenue: grossRevenue - refunds,
+      paidCount: grossAgg._count,
+      revenueByType: byType.map((row) => ({ type: row.type, amount: Number(row._sum.amount ?? 0) })),
     };
   }
 

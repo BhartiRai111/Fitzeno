@@ -102,7 +102,7 @@ export default function PortalBookingsPage() {
                       <div>
                         <p className="text-sm font-medium text-foreground">{gymClass.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          with {trainer?.name} · {formatOccurrence(gymClass.day)} · {gymClass.startTime}
+                          with {trainer?.name} · {formatOccurrence(gymClass.day, undefined, gymClass.date)} · {gymClass.startTime}
                         </p>
                         <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                           <MapPin className="size-3" /> {gymClass.location}
@@ -191,7 +191,7 @@ export default function PortalBookingsPage() {
                     <div>
                       <p className="text-sm font-medium text-foreground">{gymClass.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        with {trainer?.name} · {formatOccurrence(gymClass.day)} · {gymClass.startTime}
+                        with {trainer?.name} · {formatOccurrence(gymClass.day, undefined, gymClass.date)} · {gymClass.startTime}
                       </p>
                       <p className="mt-1 text-xs font-medium text-warning">
                         #{waitlistPosition} on the waitlist

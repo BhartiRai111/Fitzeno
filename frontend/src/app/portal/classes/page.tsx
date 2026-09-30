@@ -12,14 +12,14 @@ import { cn } from "@/lib/utils";
 import { daysOfWeek } from "@/lib/data/classes";
 import type { GymClass } from "@/lib/data/types";
 
-const types: (GymClass["type"] | "All")[] = ["All", "HIIT", "Yoga", "Strength", "Spin", "Boxing", "Mobility", "Pilates"];
-
 export default function PortalClassesPage() {
-  const { classes } = useBookings();
+  const { classes, isLoading } = useBookings();
   const [day, setDay] = React.useState<GymClass["day"] | "All">("All");
-  const [type, setType] = React.useState<GymClass["type"] | "All">("All");
+  const [type, setType] = React.useState<string>("All");
   const [selected, setSelected] = React.useState<GymClass | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
+
+  const types = ["All", ...new Set(classes.map((c) => c.type).filter(Boolean))];
 
   const filtered = classes.filter(
     (c) => (day === "All" || c.day === day) && (type === "All" || c.type === type)
@@ -63,7 +63,9 @@ export default function PortalClassesPage() {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading classes…</p>
+      ) : filtered.length === 0 ? (
         <EmptyState
           icon={CalendarX2}
           title="No classes match your filters"

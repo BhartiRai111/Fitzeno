@@ -112,6 +112,10 @@ model Tenant {
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   announcements           Announcement[]
+  checkIns                CheckIn[]
+  checkInTokens           CheckInToken[]
+  expenses                Expense[]
+  expenseCounter          ExpenseCounter?
 
   @@map("tenants")
 }
@@ -225,6 +229,11 @@ model User {
   ptSessionsTaught       PersonalTrainingSession[] @relation("PtSessionTrainer")
   transactionsRecorded   Transaction[]
   refundsProcessed       Refund[]
+  /// Gym check-ins this user personally recorded at the front desk (MANUAL/
+  /// KIOSK) — null for a member's own QR self-check-in, see CheckIn's own
+  /// comment.
+  checkInsRecorded       CheckIn[]                 @relation("CheckInRecordedBy")
+  expensesRecorded       Expense[]
 
   /// Every in-app notification addressed to this login — see Notification's
   /// own comment for why the recipient is always a User, never a Member/
@@ -424,6 +433,8 @@ model Member {
   memberships   MemberMembership[]
   transactions  Transaction[]
   invoices      Invoice[]
+  checkIns      CheckIn[]
+  checkInTokens CheckInToken[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -1466,9 +1477,9 @@ enum NotificationCategory {
   RENEWAL
   /// A transaction's outcome — paid, failed, refunded.
   PAYMENT
-  /// Reserved for the future Attendance module (ATTENDED/NO_SHOW already
-  /// exist as booking-status values — see ClassBooking/PersonalTrainingSession
-  /// — but nothing sets them yet, so nothing emits this category yet).
+  /// Gym check-in denials (a real membership problem, not a technical
+  /// failure — alerts staff) and class/PT no-shows (alerts the member) —
+  /// see NotificationsEventListener.onCheckInDenied/onClassBookingNoShow.
   ATTENDANCE
   /// A lead needing follow-up.
   LEAD
@@ -1487,6 +1498,12 @@ enum NotificationCategory {
   /// opt out — see NotificationPreference's own comment. Nothing emits
   /// this yet; reserved for e.g. a future account/security notice.
   SYSTEM
+  /// Expense/financial events (see the Expenses & Financial Overview
+  /// phase's own schema comment) — reserved the same way STAFF/PROMOTION
+  /// were: no automatic trigger emits this yet (deliberately, not an
+  /// oversight — see ExpensesService's own comment), kept so a future
+  /// trigger doesn't also need a migration to add it.
+  FINANCE
 
   @@map("notification_category")
 }
@@ -1620,4 +1637,276 @@ model Announcement {
 
   @@index([tenantId, createdAt])
   @@map("announcements")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 — Attendance & Check-in. Two attendance concepts, kept separate,
+// mirroring the approved frontend's own split (the Attendance/Check-in pages
+// vs. the Trainer's per-class roster page):
+//
+//   CheckIn — a general gym VISIT: the member walked in the door, independent
+//     of whether they came for a class, PT, or just to use the floor. One row
+//     per visit (check-in + optional check-out).
+//   Class/PT attendance — NOT a second CheckIn-shaped table. "Booked" and
+//     "attended" are two facts about the same booking, so it's recorded as a
+//     status transition on ClassBooking/PersonalTrainingSession itself —
+//     ATTENDED/NO_SHOW already exist as enum values on both (see each
+//     model's own comment; nothing set them until this phase). Keeping this
+//     on the booking row (rather than a parallel attendance record) is what
+//     "booking and attendance must remain distinct concepts, no duplicate
+//     source of truth" means concretely here: distinct STATES on one row,
+//     not two rows.
+//
+// CheckInToken — the server side of the QR/kiosk check-in mechanism. A
+// member's own app requests one (authenticated as themselves), gets back an
+// opaque, single-use, short-lived token; a staff-operated scanner (today) or
+// real hardware (later) redeems it against a member. The raw token is only
+// ever held by the member's client and briefly in memory — like
+// PasswordResetToken, only its SHA-256 hash is ever persisted, via the same
+// TokenService — so a captured screenshot of an old QR is useless once
+// expired, and a captured live one only ever works once (`consumedAt`).
+// Deliberately NOT a self-contained signed JWT: this needs a database row to
+// mark consumed (replay prevention) and to audit issue/redeem, not just a
+// signature to verify — the same reasoning PasswordResetToken's own comment
+// gives for opaque, DB-backed tokens over JWTs wherever revocability matters.
+// ---------------------------------------------------------------------------
+
+/// QR — the member's own app-generated code, redeemed via CheckInToken.
+/// MANUAL — a staff member typed/selected the member at the front desk
+///   (forgotten phone, code won't scan, etc.).
+/// KIOSK — a shared front-desk device/reader, not tied to one staff member's
+///   own judgment call the way MANUAL is — kept distinct since the approved
+///   frontend already surfaces "Kiosk" as its own method label.
+enum CheckInMethod {
+  QR
+  MANUAL
+  KIOSK
+
+  @@map("check_in_method")
+}
+
+// ---------------------------------------------------------------------------
+// CheckIn — see the phase-level comment above. No DB-level constraint
+// prevents a member from holding more than one open (checkOutAt: null) row
+// at a time — enforced in AttendanceService instead (mirrors this schema's
+// existing precedent of business-rule uniqueness, e.g. ClassBooking's
+// waitlist-promotion ordering, living in the service layer rather than a
+// database constraint), because the rule itself belongs to
+// AttendanceService's judgment call on what "already checked in" should
+// mean, not a hard schema invariant.
+// ---------------------------------------------------------------------------
+model CheckIn {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  method CheckInMethod
+
+  /// Who performed the check-in action — null for a member's own QR
+  /// self-check-in; set to the staff User for MANUAL/KIOSK front-desk
+  /// entries. SetNull (not Cascade/Restrict): a staff account being removed
+  /// later must never delete or block deleting historical visit records.
+  recordedByUserId String? @map("recorded_by_user_id")
+  recordedByUser   User?   @relation("CheckInRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  checkInAt  DateTime  @default(now()) @map("check_in_at")
+  checkOutAt DateTime? @map("check_out_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId, memberId, checkInAt])
+  @@index([tenantId, checkInAt])
+  @@map("check_ins")
+}
+
+// ---------------------------------------------------------------------------
+// CheckInToken — see the phase-level comment above. `expiresAt` is set a
+// short, fixed window (AttendanceService.CHECK_IN_TOKEN_TTL_SECONDS) from
+// issuance — long enough for a member to present their phone, short enough
+// that a captured/screenshotted code is worthless within seconds of leaving
+// that window.
+// ---------------------------------------------------------------------------
+model CheckInToken {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  memberId String @map("member_id")
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hash of the opaque token handed to the member's client — see
+  /// the phase-level comment; the raw value is never stored.
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([memberId])
+  @@map("check_in_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10 — Expenses & Financial Overview. A deliberately small
+// operating-expense ledger, not a general accounting system: enough to
+// record what the gym spends, categorize it, track a simple paid/pending/
+// cancelled lifecycle, and roll it up against the Payments module's own
+// revenue data for a single "revenue vs. expenses vs. net result" view.
+// Revenue itself is NEVER computed here — see TransactionsService's own
+// `getRevenueSummary` (Payments module) and FinanceService, which composes
+// that with this module's own expense aggregates. Duplicating revenue
+// logic into a second module would create exactly the "two places that
+// could disagree about the same number" this schema's other modules
+// (Invoice.totalAmount vs. Transaction, MemberMembership vs. Member)
+// consistently avoid.
+//
+// ExpenseCategory is a closed, product-defined enum (mirroring the
+// approved frontend's own fixed `ExpenseCategory` union) rather than a
+// per-tenant customizable taxonomy table — the same "closed set with an
+// OTHER escape hatch" pattern this schema already uses for
+// TransactionType/PaymentMethod/LeadSource. A gym whose spending doesn't
+// fit the other nine categories uses OTHER; there is no product
+// requirement (nor approved-frontend UI) for gyms to define their own
+// categories, so building that flexibility now would be speculative.
+//
+// Recurring expenses are metadata (`frequency`), not a template/schedule
+// that auto-generates future rows. The approved frontend's own mock ledger
+// confirms this is the real product behavior: August's rent and
+// September's rent are two independently-recorded Expense rows that both
+// happen to carry `frequency: MONTHLY` — there is no "recurring expense
+// generator" anywhere in the approved product to mirror. Building a
+// cron-driven auto-materialization job (the `NotificationsSchedulerService`
+// shape) would be real scheduling infrastructure for a need nothing in
+// this product actually demonstrates yet — exactly what this phase's own
+// instructions warn against inventing.
+// ---------------------------------------------------------------------------
+
+/// A closed set matching the approved frontend's own `ExpenseCategory`
+/// union exactly, with OTHER as the escape hatch for anything that
+/// doesn't fit — see the phase-level comment above.
+enum ExpenseCategory {
+  RENT
+  SALARIES
+  UTILITIES
+  MARKETING
+  SOFTWARE
+  MAINTENANCE
+  CLEANING
+  EQUIPMENT
+  SUPPLIES
+  OTHER
+
+  @@map("expense_category")
+}
+
+/// ONE_TIME — the default; a single, non-repeating expense.
+/// MONTHLY / QUARTERLY / YEARLY — descriptive metadata only (see the
+///   phase-level comment) — powers the "recurring vs. one-time" breakdown
+///   and lets staff record what's genuinely a recurring obligation without
+///   this phase inventing an auto-generation mechanism nothing asks for.
+/// `recurring` (as a boolean) is deliberately NOT its own stored column —
+/// it's derived as `frequency !== ONE_TIME` wherever needed (see
+/// ExpenseResponseDto), the same "don't store two fields that must stay in
+/// sync when one is trivially derivable from the other" reasoning
+/// Notification.readAt's own comment gives for avoiding a redundant flag.
+enum ExpenseFrequency {
+  ONE_TIME
+  MONTHLY
+  QUARTERLY
+  YEARLY
+
+  @@map("expense_frequency")
+}
+
+/// PENDING — recorded but not yet paid; the only status that can carry a
+///   meaningful `dueDate` and the only one `markPaid`/`cancel` can act on.
+/// PAID — settled. Deliberately terminal for the guarded lifecycle actions
+///   (no "un-pay" action) so a paid expense's own history stays reliable —
+///   mirroring TransactionStatus.PAID's own role as a settled fact; a
+///   genuine correction goes through the general-purpose update endpoint
+///   instead (see ExpensesService.update), the same free-form edit the
+///   approved frontend's own Edit dialog already allows regardless of
+///   status.
+/// CANCELLED — voided before ever being paid; `reopen` returns it to
+///   PENDING. Doesn't count toward any total.
+enum ExpenseStatus {
+  PENDING
+  PAID
+  CANCELLED
+
+  @@map("expense_status")
+}
+
+// ---------------------------------------------------------------------------
+// ExpenseCounter — one row per tenant, the atomic source of the next
+// sequential expense reference for that gym ("EXP-000123") — the exact
+// same single-row-locked-UPDATE pattern InvoiceCounter already established
+// for invoice numbering, reused rather than reinvented.
+// ---------------------------------------------------------------------------
+model ExpenseCounter {
+  tenantId   String @id @map("tenant_id")
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lastNumber Int    @default(0) @map("last_number")
+
+  @@map("expense_counters")
+}
+
+// ---------------------------------------------------------------------------
+// Expense — one row per operating expense. See the phase-level comment
+// above for why this stays a flat, simple ledger row rather than growing
+// accounting-system concepts (line items, ledger accounts, approval
+// workflows) nothing in the approved product asks for.
+// ---------------------------------------------------------------------------
+model Expense {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// "EXP-000123", unique per tenant — see ExpenseCounter. Never
+  /// client-supplied.
+  reference String @map("reference")
+
+  title    String
+  category ExpenseCategory
+  amount   Decimal         @db.Decimal(10, 2)
+  /// Snapshotted from Tenant.currency at record time — same convention as
+  /// Transaction.currency.
+  currency String
+
+  frequency ExpenseFrequency @default(ONE_TIME)
+  status    ExpenseStatus    @default(PENDING)
+  method    PaymentMethod
+
+  vendor String?
+  notes  String?
+
+  /// Calendar date the expense was incurred/recorded — UTC midnight, same
+  /// convention as every other date-only column in this schema
+  /// (ClassOccurrence.date, MemberMembership.startDate, ...).
+  date    DateTime
+  /// Only meaningful while PENDING — when payment is due.
+  dueDate DateTime? @map("due_date")
+
+  paidAt      DateTime? @map("paid_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  /// Who recorded this row — a staff member's own action. SetNull, not
+  /// Restrict: a departed staff account being disabled must never block
+  /// reading old financial history — same reasoning as
+  /// Transaction.recordedByUserId.
+  recordedByUserId String? @map("recorded_by_user_id")
+  recordedByUser   User?   @relation(fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+  @@index([tenantId, date])
+  @@map("expenses")
 }

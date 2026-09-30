@@ -3,10 +3,12 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationsService } from './notifications.service.js';
 import { NOTIFICATION_EVENTS } from './events/domain-events.js';
 import type {
+  AttendanceNoShowEvent,
   BookingCancelledByStaffEvent,
   BookingConfirmedEvent,
   BookingPromotedEvent,
   BookingWaitlistedEvent,
+  CheckInDeniedEvent,
   ClassOccurrenceCancelledEvent,
   ClassOccurrenceRescheduledEvent,
   MembershipLifecycleEvent,
@@ -17,7 +19,15 @@ import type {
   TransactionRefundedEvent,
 } from './events/domain-events.js';
 import { NotificationCategory, NotificationPriority } from '../generated/prisma/enums.js';
-import { PAYMENT_ALERT_STAFF_ROLES } from './notification-rules.const.js';
+import { ATTENDANCE_ALERT_STAFF_ROLES, PAYMENT_ALERT_STAFF_ROLES } from './notification-rules.const.js';
+
+const CHECK_IN_DENIAL_COPY: Record<CheckInDeniedEvent['reason'], string> = {
+  MEMBERSHIP_EXPIRED: 'their membership has expired',
+  MEMBERSHIP_FROZEN: 'their membership is frozen',
+  MEMBERSHIP_CANCELLED: 'their membership was cancelled',
+  NO_MEMBERSHIP: "they don't have a membership on file",
+  MEMBER_INACTIVE: 'their account is marked inactive',
+};
 
 function formatClassDateTime(date: Date, startTime: string): string {
   const formatted = new Intl.DateTimeFormat('en-GB', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date);
@@ -335,6 +345,53 @@ export class NotificationsEventListener {
         relatedEntityType: 'refund',
         relatedEntityId: event.refundId,
         actionUrl: '/portal/membership',
+      });
+    });
+  }
+
+  /** Never emitted for a technical failure (bad/expired QR token) — only once a real member is identified and turned away for a business reason. See CheckInDeniedEvent's own comment for why staff, not the member, are notified. */
+  @OnEvent(NOTIFICATION_EVENTS.CHECK_IN_DENIED)
+  onCheckInDenied(event: CheckInDeniedEvent): Promise<void> {
+    return this.guard(NOTIFICATION_EVENTS.CHECK_IN_DENIED, async () => {
+      await this.notificationsService.notifyUsersByRoles(event.tenantId, [...ATTENDANCE_ALERT_STAFF_ROLES], {
+        category: NotificationCategory.ATTENDANCE,
+        priority: NotificationPriority.MEDIUM,
+        title: 'Check-in denied',
+        message: `${event.memberName} was turned away at check-in — ${CHECK_IN_DENIAL_COPY[event.reason]}.`,
+        relatedEntityType: 'member',
+        relatedEntityId: event.memberId,
+        actionUrl: '/owner/members',
+      });
+    });
+  }
+
+  /** The member wasn't there to see the mark happen, unlike ATTENDED, which needs no notification — see AttendanceNoShowEvent's own comment. */
+  @OnEvent(NOTIFICATION_EVENTS.CLASS_BOOKING_NO_SHOW)
+  onClassBookingNoShow(event: AttendanceNoShowEvent): Promise<void> {
+    return this.guard(NOTIFICATION_EVENTS.CLASS_BOOKING_NO_SHOW, async () => {
+      await this.notificationsService.notifyMember(event.tenantId, event.memberId, {
+        category: NotificationCategory.ATTENDANCE,
+        priority: NotificationPriority.LOW,
+        title: 'Marked as no-show',
+        message: `You were marked as a no-show for ${event.className} (${formatClassDateTime(event.date, event.startTime)}).`,
+        relatedEntityType: 'class_booking',
+        relatedEntityId: event.bookingId,
+        actionUrl: '/portal/bookings',
+      });
+    });
+  }
+
+  @OnEvent(NOTIFICATION_EVENTS.PT_SESSION_NO_SHOW)
+  onPtSessionNoShow(event: AttendanceNoShowEvent): Promise<void> {
+    return this.guard(NOTIFICATION_EVENTS.PT_SESSION_NO_SHOW, async () => {
+      await this.notificationsService.notifyMember(event.tenantId, event.memberId, {
+        category: NotificationCategory.ATTENDANCE,
+        priority: NotificationPriority.LOW,
+        title: 'Marked as no-show',
+        message: `You were marked as a no-show for your ${formatClassDateTime(event.date, event.startTime)} personal training session.`,
+        relatedEntityType: 'pt_session',
+        relatedEntityId: event.bookingId,
+        actionUrl: '/portal/bookings',
       });
     });
   }

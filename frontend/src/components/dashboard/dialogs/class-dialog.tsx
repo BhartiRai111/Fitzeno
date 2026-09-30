@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { Plus, AlertTriangle } from "lucide-react";
+import { Plus } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -23,12 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { trainers } from "@/lib/data/trainers";
-import { gymClasses, daysOfWeek } from "@/lib/data/classes";
-import { ptSessions } from "@/lib/data/pt-sessions";
-import { getTrainerClassConflicts, getTrainerPtConflicts } from "@/lib/booking-helpers";
+import { daysOfWeek } from "@/lib/data/classes";
+import { useCreateClassSeries, useUpdateClassSeries, type CreateClassInput } from "@/hooks/use-classes";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import type { GymClass } from "@/lib/data/types";
-
-const classTypes: GymClass["type"][] = ["HIIT", "Yoga", "Strength", "Spin", "Boxing", "Mobility", "Pilates"];
 
 interface ClassDialogProps {
   gymClass?: GymClass;
@@ -37,12 +35,15 @@ interface ClassDialogProps {
 
 export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
   const [open, setOpen] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
   const [trainerId, setTrainerId] = React.useState(gymClass?.trainerId ?? trainers[0].id);
   const [day, setDay] = React.useState<GymClass["day"]>(gymClass?.day ?? "Mon");
   const [startTime, setStartTime] = React.useState(gymClass?.startTime ?? "09:00");
   const [duration, setDuration] = React.useState(gymClass?.duration ?? 45);
   const isEdit = !!gymClass;
+
+  const createSeries = useCreateClassSeries();
+  const updateSeries = useUpdateClassSeries();
+  const submitting = createSeries.isPending || updateSeries.isPending;
 
   React.useEffect(() => {
     // Intentional: reset the form to the target class's values each time this dialog reopens.
@@ -57,20 +58,35 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const conflicts = [
-    ...getTrainerClassConflicts(gymClasses, trainerId, day, startTime, duration, gymClass?.id),
-    ...getTrainerPtConflicts(ptSessions, trainerId, day, startTime, duration),
-  ];
-  const trainerName = trainers.find((t) => t.id === trainerId)?.name;
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    const form = new FormData(event.currentTarget);
+    const input: CreateClassInput = {
+      name: String(form.get("name") ?? "").trim(),
+      type: String(form.get("type") ?? "").trim(),
+      trainerId,
+      day,
+      startTime,
+      duration,
+      capacity: Number(form.get("capacity")) || 1,
+      location: String(form.get("location") ?? "").trim(),
+    };
+
+    try {
+      if (isEdit) {
+        await updateSeries.mutateAsync({ id: gymClass.id, input });
+      } else {
+        await createSeries.mutateAsync(input);
+      }
       setOpen(false);
       toast.success(isEdit ? "Class updated" : "Class created");
-    }, 700);
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError || err instanceof NetworkError
+          ? err.message
+          : `Couldn't ${isEdit ? "update" : "create"} this class. Please try again.`
+      );
+    }
   }
 
   return (
@@ -97,15 +113,8 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Type</Label>
-              <Select defaultValue={gymClass?.type ?? "HIIT"}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {classTypes.map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="class-type">Type</Label>
+              <Input id="class-type" name="type" defaultValue={gymClass?.type} placeholder="HIIT" required />
             </div>
             <div className="space-y-1.5">
               <Label>Trainer</Label>
@@ -156,15 +165,6 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
               />
             </div>
           </div>
-
-          {conflicts.length > 0 && (
-            <div className="flex items-start gap-2.5 rounded-md bg-danger-tint px-3 py-2.5 text-sm text-danger">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>
-                Schedule conflict — {trainerName} already has {conflicts.map((c) => c.label).join(", ")} at this time.
-              </span>
-            </div>
-          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">

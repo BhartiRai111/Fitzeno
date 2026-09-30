@@ -69,6 +69,8 @@ export const NON_TOGGLEABLE_CATEGORIES: readonly NotificationCategory[] = [Notif
 /** Staff roles targeted by a business-critical broadcast (payment failures, unassigned lead follow-ups) — see NotificationsEventListener. */
 export const PAYMENT_ALERT_STAFF_ROLES: readonly UserRole[] = [UserRole.OWNER, UserRole.MANAGER, UserRole.FRONT_DESK];
 export const LEAD_ALERT_STAFF_ROLES: readonly UserRole[] = [UserRole.OWNER, UserRole.MANAGER, UserRole.FRONT_DESK];
+/** Front-of-house roles alerted when a member's check-in is denied — the same staff who could act on it (renew/unfreeze) at the desk. */
+export const ATTENDANCE_ALERT_STAFF_ROLES: readonly UserRole[] = [UserRole.OWNER, UserRole.MANAGER, UserRole.FRONT_DESK];
 
 // ---------------------------------------------------------------------------
 // Dedup-key builders for scheduled/reminder notifications — see the

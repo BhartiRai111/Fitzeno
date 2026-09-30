@@ -5,7 +5,7 @@ import { daysOfWeek } from "@/lib/data/classes";
 import { trainers } from "@/lib/data/trainers";
 import type { GymClass } from "@/lib/data/types";
 
-const typeAccent: Record<GymClass["type"], string> = {
+const typeAccent: Record<string, string> = {
   HIIT: "border-warning",
   Yoga: "border-info",
   Strength: "border-primary",
@@ -41,7 +41,7 @@ export function WeekCalendar({ classes }: { classes: GymClass[] }) {
                       trigger={
                         <button
                           type="button"
-                          className={`w-full rounded-md border-l-4 bg-card p-2.5 text-left shadow-elevation-xs transition-colors hover:bg-muted/50 ${typeAccent[gymClass.type]}`}
+                          className={`w-full rounded-md border-l-4 bg-card p-2.5 text-left shadow-elevation-xs transition-colors hover:bg-muted/50 ${typeAccent[gymClass.type] ?? "border-muted-foreground"}`}
                           title={`Edit ${gymClass.name}`}
                         >
                           <p className="truncate text-xs font-semibold text-foreground">{gymClass.name}</p>

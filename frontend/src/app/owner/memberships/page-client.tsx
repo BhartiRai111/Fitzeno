@@ -16,13 +16,12 @@ import { OwnerPlanCard } from "@/components/dashboard/owner-plan-card";
 import { PlanDialog } from "@/components/dashboard/dialogs/plan-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { CalendarCheck2 } from "lucide-react";
-import { members as initialMembers } from "@/lib/data/members";
-import { membershipPlans } from "@/lib/data/plans";
-import { getPlanByName, computeNextExpiry } from "@/lib/membership-helpers";
+import { useMembersRoster, useRenewMembership } from "@/hooks/use-members";
+import { useMembershipPlans } from "@/hooks/use-membership-plans";
+import { ApiError, NetworkError } from "@/lib/api/types";
+import { TODAY } from "@/lib/booking-helpers";
 import { formatDate, daysBetween } from "@/lib/utils-data";
 import type { Member } from "@/lib/data/types";
-
-const TODAY = "2026-09-21";
 
 type TabValue = "plans" | "active" | "expiring" | "expired" | "renewals";
 
@@ -66,8 +65,8 @@ function MemberTable({
                 <td className="px-4 py-3 text-muted-foreground">{member.plan}</td>
                 <td className="px-4 py-3"><MembershipStatusBadge status={member.status} /></td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {formatDate(member.expiresOn)}
-                  {daysBetween(TODAY, member.expiresOn) <= 0 && member.status !== "cancelled" && (
+                  {member.expiresOn ? formatDate(member.expiresOn) : "—"}
+                  {member.expiresOn && daysBetween(TODAY, member.expiresOn) <= 0 && member.status !== "cancelled" && (
                     <span className="ml-1.5 text-xs text-danger">overdue</span>
                   )}
                 </td>
@@ -98,7 +97,10 @@ export function MembershipsPageClient() {
   const initialTab = (searchParams.get("tab") as TabValue) ?? "plans";
   const [tab, setTab] = React.useState<TabValue>(initialTab);
   const [search, setSearch] = React.useState("");
-  const [members, setMembers] = React.useState<Member[]>(initialMembers);
+
+  const { members, membershipByMemberId, isLoading: rosterLoading, isError: rosterError } = useMembersRoster();
+  const { plans, isLoading: plansLoading } = useMembershipPlans();
+  const renewMembership = useRenewMembership();
 
   const activeMembers = members.filter((m) => m.status === "active");
   const expiringMembers = members.filter((m) => m.status === "expiring");
@@ -113,23 +115,51 @@ export function MembershipsPageClient() {
   }
 
   function handleRenew(memberId: string) {
+    const membership = membershipByMemberId.get(memberId);
     const member = members.find((m) => m.id === memberId);
-    if (!member) return;
-    const plan = getPlanByName(member.plan);
-    const newExpiry = computeNextExpiry(member.expiresOn, TODAY, plan?.billingPeriod ?? "month");
-    setMembers((prev) =>
-      prev.map((m) =>
-        m.id === memberId ? { ...m, status: "active", expiresOn: newExpiry, paymentStatus: "paid" } : m
-      )
+    if (!membership || !member) return;
+
+    renewMembership.mutate(
+      { id: membership.id, planId: membership.plan.id },
+      {
+        onSuccess: (updated) => {
+          toast.success(`${member.name}'s membership renewed`, {
+            description: `Now active until ${formatDate(updated.endDate)}.`,
+          });
+        },
+        onError: (err) => {
+          toast.error(
+            err instanceof ApiError || err instanceof NetworkError
+              ? err.message
+              : "Couldn't renew this membership. Please try again."
+          );
+        },
+      }
     );
-    toast.success(`${member.name}'s membership renewed`, { description: `Now active until ${formatDate(newExpiry)}.` });
+  }
+
+  if (rosterLoading || plansLoading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Memberships" description="Loading…" />
+      </div>
+    );
+  }
+
+  if (rosterError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Memberships" />
+        <EmptyState icon={CalendarCheck2} title="Couldn't load memberships" description="Check your connection and refresh the page." />
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Memberships"
-        description={`${membershipPlans.length} plans · ${activeMembers.length} active members`}
+        description={`${plans.length} plans · ${activeMembers.length} active members`}
         actions={<PlanDialog />}
       />
 
@@ -143,11 +173,15 @@ export function MembershipsPageClient() {
         </TabsList>
 
         <TabsContent value="plans">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {membershipPlans.map((plan) => (
-              <OwnerPlanCard key={plan.id} plan={plan} members={members} />
-            ))}
-          </div>
+          {plans.length === 0 ? (
+            <EmptyState icon={CalendarCheck2} title="No plans yet" description="Create a membership plan for members to choose from." />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {plans.map((plan) => (
+                <OwnerPlanCard key={plan.id} plan={plan} members={members} />
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         {(["active", "expiring", "expired", "renewals"] as const).map((value) => (

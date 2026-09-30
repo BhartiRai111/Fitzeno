@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { Search, Receipt } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -21,14 +22,24 @@ import { ExpenseDialog, type ExpenseInput } from "@/components/dashboard/dialogs
 import { ExpenseActionsMenu } from "@/components/dashboard/expense-actions-menu";
 import { FinancesOverviewTab } from "@/components/dashboard/finances/overview-tab";
 
-import { expenses as initialExpenses } from "@/lib/data/expenses";
-import { EXPENSE_CATEGORIES, TODAY, generateExpenseReference } from "@/lib/finance-helpers";
+import {
+  useExpensesRoster,
+  useCreateExpense,
+  useUpdateExpense,
+  useMarkExpensePaid,
+  useCancelExpense,
+  useReopenExpense,
+  toBackendExpenseInput,
+} from "@/hooks/use-expenses";
+import { EXPENSE_CATEGORIES } from "@/lib/finance-helpers";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { formatCurrency, formatDate } from "@/lib/utils-data";
-import type { Expense } from "@/lib/data/types";
-
-const CURRENT_USER = "Sam Carter";
 
 type TabValue = "overview" | "expenses";
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof NetworkError ? err.message : fallback;
+}
 
 export function FinancesPageClient() {
   const searchParams = useSearchParams();
@@ -37,37 +48,58 @@ export function FinancesPageClient() {
   const initialStatus = searchParams.get("status") ?? "all";
 
   const [tab, setTab] = React.useState<TabValue>(initialTab);
-  const [expenses, setExpenses] = React.useState<Expense[]>(initialExpenses);
+  const { expenses, isLoading, isError } = useExpensesRoster();
+  const createExpense = useCreateExpense();
+  const updateExpense = useUpdateExpense();
+  const markExpensePaid = useMarkExpensePaid();
+  const cancelExpense = useCancelExpense();
+  const reopenExpense = useReopenExpense();
 
   const [search, setSearch] = React.useState("");
   const [categoryFilter, setCategoryFilter] = React.useState(initialCategory);
   const [statusFilter, setStatusFilter] = React.useState(initialStatus);
   const [recurringFilter, setRecurringFilter] = React.useState("all");
 
-  function handleAddExpense(input: ExpenseInput) {
-    const newExpense: Expense = {
-      id: `exp-${Date.now()}`,
-      reference: generateExpenseReference(expenses),
-      recordedBy: CURRENT_USER,
-      ...input,
-    };
-    setExpenses((prev) => [newExpense, ...prev]);
+  async function handleAddExpense(input: ExpenseInput) {
+    try {
+      await createExpense.mutateAsync(toBackendExpenseInput(input));
+      toast.success("Expense recorded", { description: `${input.title} has been added to the ledger.` });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't record this expense. Please try again."));
+    }
   }
 
-  function handleEditExpense(id: string, input: ExpenseInput) {
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, ...input } : e)));
+  async function handleEditExpense(id: string, input: ExpenseInput) {
+    try {
+      await updateExpense.mutateAsync({ id, input: toBackendExpenseInput(input) });
+      toast.success("Expense updated", { description: `${input.title} has been updated.` });
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't update this expense. Please try again."));
+    }
   }
 
   function handleMarkPaid(id: string) {
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, status: "paid" } : e)));
+    const expense = expenses.find((e) => e.id === id);
+    markExpensePaid.mutate(id, {
+      onSuccess: () => toast.success(`${expense?.title ?? "Expense"} marked as paid`),
+      onError: (err) => toast.error(errorMessage(err, "Couldn't mark this expense as paid. Please try again.")),
+    });
   }
 
   function handleCancel(id: string) {
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, status: "cancelled" } : e)));
+    const expense = expenses.find((e) => e.id === id);
+    cancelExpense.mutate(id, {
+      onSuccess: () => toast.success(`${expense?.title ?? "Expense"} cancelled`),
+      onError: (err) => toast.error(errorMessage(err, "Couldn't cancel this expense. Please try again.")),
+    });
   }
 
   function handleReopen(id: string) {
-    setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, status: "pending", dueDate: e.dueDate ?? TODAY } : e)));
+    const expense = expenses.find((e) => e.id === id);
+    reopenExpense.mutate(id, {
+      onSuccess: () => toast.success(`${expense?.title ?? "Expense"} reopened as pending`),
+      onError: (err) => toast.error(errorMessage(err, "Couldn't reopen this expense. Please try again.")),
+    });
   }
 
   const filteredExpenses = [...expenses]
@@ -142,7 +174,11 @@ export function FinancesPageClient() {
             </Select>
           </Card>
 
-          {filteredExpenses.length === 0 ? (
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading expenses…</p>
+          ) : isError ? (
+            <EmptyState icon={Receipt} title="Couldn't load expenses" description="Check your connection and refresh the page." />
+          ) : filteredExpenses.length === 0 ? (
             <EmptyState
               icon={Receipt}
               title="No expenses match these filters"

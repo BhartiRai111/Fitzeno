@@ -8,11 +8,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PlanDialog } from "@/components/dashboard/dialogs/plan-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
+import { useArchiveMembershipPlan } from "@/hooks/use-membership-plans";
+import { ApiError, NetworkError } from "@/lib/api/types";
 import { formatCurrency } from "@/lib/utils-data";
 import type { Member, MembershipPlan } from "@/lib/data/types";
 
 export function OwnerPlanCard({ plan, members }: { plan: MembershipPlan; members: Member[] }) {
   const activeCount = members.filter((m) => m.plan === plan.name && m.status === "active").length;
+  const archivePlan = useArchiveMembershipPlan();
+
+  function handleArchive() {
+    archivePlan.mutate(plan.id, {
+      onSuccess: () => toast.success(`${plan.name} archived`),
+      onError: (err) =>
+        toast.error(err instanceof ApiError || err instanceof NetworkError ? err.message : "Couldn't archive this plan. Please try again."),
+    });
+  }
 
   return (
     <Card className="flex flex-col p-5">
@@ -51,7 +62,7 @@ export function OwnerPlanCard({ plan, members }: { plan: MembershipPlan; members
           title={`Archive ${plan.name}?`}
           description="Existing members keep this plan until they renew or switch. New signups won't see it."
           confirmLabel="Archive Plan"
-          onConfirm={() => toast.success(`${plan.name} archived`)}
+          onConfirm={handleArchive}
         />
       </div>
     </Card>

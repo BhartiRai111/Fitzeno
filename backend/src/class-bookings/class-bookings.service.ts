@@ -7,6 +7,7 @@ import type { Prisma } from '../generated/prisma/client.js';
 import { PaginatedResult } from '../common/dto/pagination-query.dto.js';
 import { toClassBookingResponse, type ClassBookingResponseDto } from './dto/class-booking-response.dto.js';
 import type { ListClassBookingsQueryDto } from './dto/list-class-bookings-query.dto.js';
+import type { AttendanceMarkStatus } from './dto/mark-attendance.dto.js';
 import { NOTIFICATION_EVENTS } from '../notifications/events/domain-events.js';
 
 /** How long before class start a member is still allowed to self-cancel a CONFIRMED booking — mirrors the approved frontend's CANCELLATION_WINDOW_HOURS. */
@@ -214,6 +215,57 @@ export class ClassBookingsService {
       date: result.classOccurrence.date,
       startTime: result.classOccurrence.startTime,
     });
+    return result;
+  }
+
+  /**
+   * Records — or corrects — a class booking's attendance outcome. Only a
+   * CONFIRMED, ATTENDED, or NO_SHOW booking can have attendance touched
+   * (never WAITLISTED/CANCELLED — there's no seat that was actually taken);
+   * marking `CONFIRMED` reverts a previous ATTENDED/NO_SHOW mark back to
+   * pending, matching the approved frontend's "revert to booked" action.
+   * A TRAINER caller is restricted to classes they teach — the same
+   * `classOccurrence.trainerId` scoping `list()` already applies, so a
+   * trainer can never mark attendance on another trainer's roster.
+   */
+  async markAttendance(
+    tenantId: string,
+    bookingId: string,
+    status: AttendanceMarkStatus,
+    caller?: CallerContext,
+  ): Promise<ClassBookingResponseDto> {
+    const booking = await this.prisma.classBooking.findFirst({
+      where: { id: bookingId, tenantId },
+      include: { classOccurrence: true },
+    });
+    if (!booking) {
+      throw new NotFoundException('Booking not found.');
+    }
+    if (caller?.role === UserRole.TRAINER && booking.classOccurrence.trainerId !== caller.id) {
+      throw new ForbiddenException("You don't have access to this booking.");
+    }
+    const markable = [ClassBookingStatus.CONFIRMED, ClassBookingStatus.ATTENDED, ClassBookingStatus.NO_SHOW] as const;
+    if (!markable.includes(booking.status as (typeof markable)[number])) {
+      throw new BadRequestException('Only a confirmed booking can have attendance recorded.');
+    }
+
+    const updated = await this.prisma.classBooking.update({
+      where: { id: bookingId },
+      data: { status: status as ClassBookingStatus },
+      include: bookingInclude,
+    });
+    const result = toClassBookingResponse(updated);
+
+    if (status === ClassBookingStatus.NO_SHOW && booking.status !== ClassBookingStatus.NO_SHOW) {
+      this.eventEmitter.emit(NOTIFICATION_EVENTS.CLASS_BOOKING_NO_SHOW, {
+        tenantId,
+        memberId: result.member.id,
+        bookingId: result.id,
+        className: result.classOccurrence.name,
+        date: result.classOccurrence.date,
+        startTime: result.classOccurrence.startTime,
+      });
+    }
     return result;
   }
 

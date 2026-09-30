@@ -51,7 +51,7 @@ export default function MemberDashboardPage() {
     .map((v) => ({
       key: v.booking.id,
       label: v.gymClass.name,
-      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`,
+      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day, undefined, v.gymClass.date)} · ${v.gymClass.startTime}`,
       status: "booked" as const,
       sortKey: `${v.occurrenceDate}${v.gymClass.startTime}`,
     }));
@@ -69,7 +69,7 @@ export default function MemberDashboardPage() {
     .map((v) => ({
       key: v.booking.id,
       label: v.gymClass.name,
-      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`,
+      sublabel: `with ${trainers.find((t) => t.id === v.gymClass.trainerId)?.name} · ${formatOccurrence(v.gymClass.day, undefined, v.gymClass.date)} · ${v.gymClass.startTime}`,
       status: "waitlisted" as const,
       sortKey: `${v.occurrenceDate}${v.gymClass.startTime}`,
     }));
@@ -80,7 +80,7 @@ export default function MemberDashboardPage() {
   const nextWithFavorite = [
     ...myClassBookings
       .filter((v) => v.booking.status === "booked" && v.gymClass.trainerId === favoriteTrainer.id)
-      .map((v) => ({ label: `${formatOccurrence(v.gymClass.day)} · ${v.gymClass.startTime}`, sortKey: `${v.occurrenceDate}${v.gymClass.startTime}` })),
+      .map((v) => ({ label: `${formatOccurrence(v.gymClass.day, undefined, v.gymClass.date)} · ${v.gymClass.startTime}`, sortKey: `${v.occurrenceDate}${v.gymClass.startTime}` })),
     ...myPtSessions
       .filter((s) => s.status === "booked" && s.trainerId === favoriteTrainer.id)
       .map((s) => ({ label: `${s.date} · ${s.startTime}`, sortKey: `${s.date}${s.startTime}` })),

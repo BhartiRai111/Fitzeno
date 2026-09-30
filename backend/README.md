@@ -1217,6 +1217,240 @@ Adding email/SMS/push later means a new listener (or a new branch inside
 the existing one) that reads the same `Notification` row and calls a
 provider — the domain model itself doesn't need to change.
 
+### Attendance & Check-in
+
+Two attendance concepts, kept deliberately separate rather than one
+catch-all table — mirroring the approved frontend's own split between the
+Attendance/Check-in pages and the Trainer's per-class roster page:
+
+- **General gym check-in** (`CheckIn`, a new `attendance/` module) — a
+  member walked in the door, independent of any class/PT booking.
+- **Class/PT attendance** — not a second `CheckIn`-shaped row. `ATTENDED`/
+  `NO_SHOW` (and PT's `COMPLETED`/`NO_SHOW`) already existed as unused enum
+  values on `ClassBooking`/`PersonalTrainingSession` from the Trainers/
+  Classes/Bookings phase (schema groundwork laid in advance); this phase is
+  the first to actually set them, via a new `markAttendance` method added
+  directly to the existing `ClassBookingsService`/`PtSessionsService` (and
+  a `POST /class-bookings/:id/attendance` / `POST /pt-sessions/:id/attendance`
+  endpoint on each existing controller) rather than a parallel table —
+  "booked" and "attended" are two *states* of one row, not two rows, which
+  is what keeps this a single source of truth.
+
+**Check-in eligibility is real, not a stand-in.** Every check-in path
+(self, front-desk manual/kiosk, QR token redemption) funnels through one
+`AttendanceService.performCheckIn`, which re-checks, fresh, on every call:
+`Member.status === ACTIVE` first (an owner can deactivate someone for
+reasons unrelated to billing), then the member's actual current membership
+period via `MembershipsService.getCurrentForMember` — the same
+`effectiveStatus` (`PENDING`/`ACTIVE`/`EXPIRED`/`FROZEN`/`CANCELLED`) the
+Memberships phase already computes, now backing a real check-in decision
+instead of the approved frontend's mock `getMembershipBlock`. A denial
+(`MEMBERSHIP_EXPIRED`/`MEMBERSHIP_FROZEN`/`MEMBERSHIP_CANCELLED`/
+`NO_MEMBERSHIP`/`MEMBER_INACTIVE`) is a normal `200`/`201` **business
+outcome** (`CheckInAttemptResponseDto { outcome, denialReason, message,
+checkIn }`), not an HTTP error — the caller (member's own app, or the
+front desk) always gets a real member and a clear reason back. A missing
+or cross-tenant member id is still a genuine `404`/`400`, since there's no
+legitimate member context to report a business outcome for.
+
+**A member can't hold two open visits at once — enforced in the service,
+not a database constraint.** `performCheckIn` looks for an existing
+`checkIn` row with `checkOutAt: null` for that member before creating a
+new one; if found, it returns `ALREADY_CHECKED_IN` with the existing row
+rather than inserting a duplicate. This mirrors this schema's established
+precedent (e.g. `ClassBooking`'s waitlist-promotion ordering) of putting a
+business-rule invariant in the service layer rather than reaching for an
+exotic partial-unique index Prisma doesn't support cleanly.
+
+**The QR check-in foundation is a real, working mechanism — not just
+schema.** `GET /attendance/check-in/token` (member, self) issues an
+opaque, high-entropy token via the existing `TokenService.generateOpaqueToken`
+(the same primitive `PasswordResetToken`/`RefreshToken` already use); only
+its SHA-256 hash (`CheckInToken.tokenHash`) is ever persisted — the raw
+value exists only in the response, to be encoded as a QR code, and briefly
+in the member's client. It expires in
+`AttendanceService.CHECK_IN_TOKEN_TTL_SECONDS` (45s). A staff-operated
+reader (`POST /attendance/check-in/redeem`) hashes the presented token,
+looks it up, and rejects a missing token, one issued for a different
+tenant, an expired one, or an already-consumed one — each a plain `400`,
+deliberately with no distinction in status code between "doesn't exist"
+and "wrong gym" (never confirm a foreign-tenant token is real). Consuming
+a token uses a conditional `updateMany({ where: { id, consumedAt: null } })`
+rather than a plain `update`, so two simultaneous redemption attempts of
+the same token can't both succeed — replay prevention without needing a
+transaction. No physical scanner/hardware integration exists this phase,
+per the task's explicit scope — this is the backend a later phase's real
+QR camera/reader UI calls directly.
+
+**Front-desk operations are gated by role, on top of the area permission
+— because `TRAINER`'s existing `ATTENDANCE: MANAGE` default means
+something narrower than it sounds.** That default was set in the very
+first authz phase so a trainer could record their *own* class/PT roster
+(exactly what `ClassBookingsController`/`PtSessionsController`'s new
+`:id/attendance` routes use it for, scoped to classes/sessions they teach
+— a `TRAINER` caller gets a `403` marking someone else's roster). Reusing
+the same `PermissionArea.ATTENDANCE` for the new gym-wide check-in desk
+would have accidentally handed every trainer front-desk and attendance-
+history access no product brief asked for. `AttendanceController`'s
+gym-wide routes (manual check-in, staff check-out, history/search, today,
+stats, inactive-members, QR redemption) therefore stack a
+`@Roles(OWNER, MANAGER, FRONT_DESK)` on top of
+`@RequirePermission(ATTENDANCE, ...)` — excluding `TRAINER` specifically —
+while the `/me` self-service routes (check-in, check-out, status, history,
+token issuance) carry no role/permission decorator at all, open to any
+authenticated user with a `Member` profile, the same shape
+`ClassBookingsController`'s `/me` routes already use.
+
+**History, search, today, and stats are business-oriented reads, not
+blind CRUD, and deliberately don't rebuild Reports.**
+`GET /attendance` supports `memberId`/`method`/`open`/date-range filters
+with the shared `PaginationQueryDto`; `GET /attendance/today` returns
+today's check-ins plus a live "currently in the gym" count
+(`checkOutAt: null`); `GET /attendance/stats` returns day-bucketed visit
+counts over a date range — enough to back the approved frontend's
+weekly/monthly trend charts without a general reporting engine.
+`GET /attendance/inactive-members` returns `ACTIVE` members with no visit
+in the last N days (default 14) — accurate, queryable data only (two
+`groupBy` queries, no scoring/prediction), the raw material a future
+retention feature builds decisions on top of, per the task's own framing.
+
+**Notification integration hooks into the existing event/listener system,
+doesn't rebuild it.** Two new domain events
+(`events/domain-events.ts`): `CHECK_IN_DENIED` (staff alert only, on a
+real membership-related denial — not a technical failure like a bad QR
+token, and not the member: they already saw the denial on-screen, the same
+"the actor already knows" reasoning `BOOKING_CANCELLED_BY_STAFF` uses) and
+`CLASS_BOOKING_NO_SHOW`/`PT_SESSION_NO_SHOW` (member alert, since they
+weren't there to see the mark happen — the mirror image of why an
+`ATTENDED` mark fires nothing at all). Handled by two new cases in the
+same `NotificationsEventListener`, under `NotificationCategory.ATTENDANCE`
+— the category this schema reserved back in the Notifications phase
+specifically for this.
+
+### Expenses & Financial Overview
+
+A deliberately small operating-expense ledger (a new `expenses/` module)
+plus a `finance/` module that composes it with Payments' own revenue data
+into a single "revenue vs. expenses vs. net result" view — not a second
+accounting system, and not a second place that decides what counts as
+revenue.
+
+**`Expense` stays a flat ledger row, not an accounting structure.**
+`ExpenseCategory` is a closed, product-defined enum (Rent, Salaries,
+Utilities, Marketing, Software, Maintenance, Cleaning, Equipment,
+Supplies, Other) mirroring the approved frontend's own fixed
+`ExpenseCategory` union exactly — the same "closed set with an `OTHER`
+escape hatch" pattern this schema already uses for
+`TransactionType`/`PaymentMethod`/`LeadSource`, rather than a per-tenant
+customizable taxonomy table nothing in the approved product asks for.
+Recurring expenses are metadata only (`ExpenseFrequency`:
+`ONE_TIME`/`MONTHLY`/`QUARTERLY`/`YEARLY`) — **not** a template that
+auto-generates future rows. The approved frontend's own mock ledger
+confirms this is the real product behavior: August's rent and September's
+rent are two independently-recorded rows that both happen to carry
+`frequency: MONTHLY`; there is no "recurring expense generator" anywhere
+in the approved product to mirror, so this phase doesn't build one —
+exactly the "don't create unnecessary scheduling infrastructure" the task
+itself asked for. `recurring` (as a boolean) is never its own stored
+column; it's derived as `frequency !== ONE_TIME` in
+`ExpenseResponseDto`, the same reasoning `Notification.readAt` already
+established for not storing a redundant flag.
+
+**A three-state lifecycle, with a guarded-vs-free-form split matching the
+approved frontend's own two different actions.** `PENDING` → `PAID`
+(`markPaid`) or `PENDING` → `CANCELLED` (`cancel`), and `CANCELLED` →
+`PENDING` (`reopen`, defaulting a missing due date to today) — each a
+single atomic `updateMany` guarded by the expected current status, the
+exact same pattern `TransactionsService.transitionFromPending` already
+established. `PAID` is deliberately terminal for these guarded actions
+(no "un-pay") so a paid expense's own history stays reliable, mirroring
+`TransactionStatus.PAID`'s own role as a settled fact. Separately, the
+general-purpose `PATCH /expenses/:id` lets staff correct *any* field —
+including setting `status` directly to anything — matching the approved
+frontend's own Edit dialog, which allows exactly that regardless of an
+expense's current state; a direct status change there recomputes
+`paidAt`/`cancelledAt` the same way the guarded actions do, so a
+correction made through Edit stays just as historically accurate.
+`ExpenseCounter` issues each tenant's own sequential `EXP-000123`
+reference, the same single-row-locked-UPDATE pattern `InvoiceCounter`
+already established for invoice numbering.
+
+**Revenue is never recomputed — `TransactionsService.getRevenueSummary`
+is the one new addition on the Payments side, added alongside the
+existing `getStats` rather than replacing it.** `getStats`'s own
+`totalRevenue` (status = `PAID` only, filtered by `createdAt`) silently
+drops any transaction that has since been partially or fully refunded —
+fine for a payments-list summary, wrong for a P&L figure: a transaction
+that was paid and later partially refunded is still real gross revenue,
+just partially given back. `getRevenueSummary` instead sums every
+*settled* transaction (`PAID`, `PARTIALLY_REFUNDED`, `REFUNDED` — never
+`PENDING`/`PROCESSING`/`FAILED`/`CANCELLED`, which were never actually
+received) by `paidAt` (the date money actually changed hands, not
+`createdAt`), and nets out actual `Refund` rows by their own
+`completedAt` — giving `{ grossRevenue, refunds, netRevenue }` that's
+internally consistent for any date range, and that the financial
+overview never miscounts a failed or still-pending payment into.
+`FinanceService` composes this with `ExpensesService.getSummary` (paid
+expenses only, by category, recurring-vs-one-time split) — neither
+service duplicates the other's business rules about what counts as
+"real" revenue or "real" spend.
+
+**Date/period handling ports the approved frontend's own logic verbatim,
+not a superset.** `FinanceService`'s internal `getPresetRange`/
+`getComparisonRange` are a line-for-line backend port of
+`reports-helpers.ts`'s own preset math — `today`/`week`/`month`/
+`last-month`/`custom`, with `month`'s comparison period matched to the
+same day-of-month in the prior month (so a partial current month isn't
+unfairly measured against a full previous one) and `today`/`week`/
+`custom` shifted back by the range's own length. No `quarter`/`year`
+presets exist, because the approved frontend's own `PeriodPreset` type
+doesn't have them — "the date/filter functionality the existing UI
+actually needs," not a speculative superset.
+
+**`GET /finance/overview`** is the one endpoint the Financial Overview
+dashboard needs: gross/net revenue, refunds, total (paid) expenses, net
+result, profit margin (net result ÷ net revenue, 0 when there's no
+revenue to divide by), revenue-by-type, expenses-by-category, recurring-
+vs-one-time, unusual category increases (a direct backend port of the
+approved frontend's own `getUnusualIncreases` — flags a category only
+against a *real* prior baseline, so a category with no spend last period
+reads as "new," never a misleading +100%), and current-state pending/
+overdue/due-soon expense figures (deliberately **not** period-filtered,
+matching the approved frontend's own "operational insights" convention on
+Reports Overview and the Finances Overview tab itself). **`GET
+/finance/trend`** returns month-bucketed revenue/expenses/net for the
+trailing N months (default 6, capped at 12) — a real backend equivalent
+of the approved frontend's currently-mocked `revenueByMonth`/
+`expensesByMonth` series, computed as N small aggregate-query pairs
+rather than a raw-SQL date-bucketing query this codebase doesn't use
+anywhere else.
+
+**Gated entirely on the existing `FINANCE` PermissionArea — no additional
+role-stacking needed.** Unlike `ATTENDANCE` in the previous phase (whose
+`TRAINER` default had to be worked around with `@Roles()`), `FINANCE`'s
+own role defaults already match this data's intended sensitivity exactly:
+`OWNER`/`MANAGER` get `MANAGE`, `TRAINER`/`FRONT_DESK` get `NONE` —
+matching the approved frontend's own Finances page, which states outright
+that it's "visible to Owner and Manager roles only." Every expense and
+finance route is a plain `@RequirePermission(FINANCE, VIEW|MANAGE)`.
+
+**Notification/audit compatibility is prepared, not built.**
+`NotificationCategory.FINANCE` now exists in the schema — the same
+reserve-ahead-of-trigger pattern `STAFF`/`PROMOTION` already established
+— but nothing emits it yet: the approved product has no automated
+"unusual expense" alert concept to mirror (the unusual-category-increase
+detection above is a read-time insight the Financial Overview computes on
+request, exactly like the frontend's own equivalent, not a stored/
+triggered event), and inventing a specific materiality threshold nothing
+in the approved product asks for would be exactly the kind of speculative
+business rule this phase's own instructions warn against. There is
+likewise still no dedicated audit/activity log for expense mutations to
+hook into (see the existing "No dedicated audit/activity log yet"
+limitation below) — `ExpensesService`'s own single-purpose methods
+(`create`/`update`/`markPaid`/`cancel`/`reopen`) are the same shape that
+made this backend's existing event emission straightforward to add
+elsewhere, ready for a future audit module to hook into the same way.
+
 ### Tenant isolation
 
 The product needs one gym's data to never be reachable from another gym's
@@ -1283,29 +1517,33 @@ renewal chain, concurrency-safe under simultaneous renewal/create),
 charge type), **Invoices** (auto-generated 1:1 alongside every
 transaction, safe sequential numbering, owner search + member
 self-access), **Refunds** (full/partial, concurrency-safe validation
-against what's actually still refundable), and now **Notifications &
+against what's actually still refundable), **Notifications &
 Communication** (an event-driven in-app notification layer covering
 booking/PT/membership/payment lifecycle events, per-user preferences,
 gym-wide announcements to eight targetable audiences, and five daily
-scheduled reminder jobs) — see the sections above for the full model.
+scheduled reminder jobs), **Attendance & Check-in** (general gym
+check-in/check-out backed by real membership eligibility, a working
+opaque-token QR check-in mechanism, class/PT attendance marking on the
+existing booking/session rows, history/search/today/stats, and inactive-
+member insight data), and now **Expenses & Financial Overview** (a flat
+operating-expense ledger with categories, a paid/pending/cancelled
+lifecycle, and recurring metadata; a Financial Overview endpoint composing
+that with Payments' own refund-aware revenue data into gross/net revenue,
+net result, profit margin, category/recurring breakdowns, and a
+month-bucketed trend) — see the sections above for the full model.
 
 **Not here, by design**: a real payment gateway (Razorpay/Stripe/etc — see
 the Payments section above for the placeholder seams already in place: no
-provider SDK, webhook endpoint, or secret exists yet), Attendance (booking
-statuses `ATTENDED`/`NO_SHOW` exist on `ClassBooking`/
-`PersonalTrainingSession` as schema groundwork, but nothing sets them yet
-— see the Trainers/Classes/Bookings section above; class/PT booking
-eligibility still uses `Member.status === ACTIVE` rather than the new real
-membership data, since wiring that check is booking-module work out of
-this phase's scope, and the `ATTENDANCE` notification category has no
-trigger yet for the same reason), a real external notification channel
+provider SDK, webhook endpoint, or secret exists yet), a real external notification channel
 (email/SMS/push — see the Notifications section above for why the core
 domain needs no redesign to add one later), the full Reports
-module (`GET /transactions/stats` and `GET /memberships/stats` exist as
-data sources a future Reports module can consume, not a Reports module
-itself), Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
+module (`GET /transactions/stats`, `GET /memberships/stats`,
+`GET /attendance/stats`/`GET /attendance/inactive-members`, and now
+`GET /finance/overview`/`GET /finance/trend` exist as data sources a
+future Reports module can consume, not a Reports module itself),
+Inventory/POS/Store sales (`TransactionType.STORE_SALE` and
 `Transaction.relatedClassBookingId`'s sibling relation columns exist as
-schema groundwork only), Expenses, Audit/Activity, and any platform-level
+schema groundwork only), Search, Audit/Activity, and any platform-level
 admin surface (the `TenantStatus.SUSPENDED` state and its enforcement
 exist, but nothing can set it yet). Every one of these is a real business
 domain the frontend
@@ -1426,21 +1664,28 @@ duplicating any of them.
   that specific occurrence is later individually edited. A narrow gap,
   documented rather than solved with a heavier check across every future
   occurrence of every series.
-- `ClassBooking`/`PersonalTrainingSession` carry `ATTENDED`/`NO_SHOW` (and
-  `COMPLETED` for PT) status values with nothing in this phase that ever
-  sets them — deliberate schema groundwork for the next phase's Attendance
-  module, not a partially-built feature.
+- `ClassBooking`/`PersonalTrainingSession`'s `ATTENDED`/`NO_SHOW` (and
+  `COMPLETED` for PT) status values, reserved as schema groundwork in the
+  Trainers/Classes/Bookings phase, are now actually set — via
+  `markAttendance` on each existing service (see the Attendance & Check-in
+  section above) — rather than staying unused.
 - No configurable booking window (how far ahead a class must be booked) or
   per-tenant cancellation-window setting — the 4-hour cancellation window
   is a hard-coded constant (`CANCELLATION_WINDOW_HOURS`, mirroring the
   approved frontend's own constant), same reasoning as every other
   not-yet-configurable rule in this backend: genuinely supported by the
   product today, not invented ahead of a real need.
-- Class/PT booking eligibility still checks `Member.status === ACTIVE`,
-  not the new real `MemberMembership` data — wiring "does this member
-  currently hold an active membership" into the booking flow is
-  Classes/Bookings-module work, out of scope for this phase (see the
-  Membership Plans section above).
+- Class/PT booking eligibility (`ClassBookingsService.book`/
+  `PtSessionsService.book`) still checks only `Member.status === ACTIVE`,
+  not real `MemberMembership` data — wiring "does this member currently
+  hold an active membership" into the *booking* flow remains
+  Classes/Bookings-module work, out of scope for this phase. This now
+  diverges from gym check-in, which this phase *did* wire to real
+  membership eligibility (`MembershipsService.getCurrentForMember` — see
+  the Attendance & Check-in section above): a member with an expired
+  membership can currently still book a class but would be denied at the
+  door. Worth revisiting Classes/Bookings to use the same eligibility
+  check Attendance now does.
 - No `DELETE` on `MembershipPlan` — archiving is the only removal action,
   by design (see the section above), but this also means a plan created
   by mistake stays visible to staff in the archived list forever rather
@@ -1494,3 +1739,56 @@ duplicating any of them.
   from the server gets its reminders at a fixed UTC-relative hour rather
   than a locally-sensible one, even though `Tenant.timezone` already
   exists in the schema for a future pass to read.
+- No physical QR scanner/hardware integration — `GET
+  /attendance/check-in/token` + `POST /attendance/check-in/redeem` is a
+  complete, working, secure token-issue-and-redeem mechanism, but nothing
+  in this phase drives it from an actual camera/reader; a staff client
+  today would call `redeem` with a token typed/scanned by some other means.
+  This was explicit scope for this phase (see the Attendance & Check-in
+  section above).
+- A trainer can only mark class/PT attendance one booking/session at a
+  time (`POST /class-bookings/:id/attendance`,
+  `POST /pt-sessions/:id/attendance`) — no bulk "mark everyone present"
+  endpoint. The approved frontend's Trainer Attendance page already marks
+  one roster row at a time, so this matches actual UI need rather than
+  anticipating a bulk action nothing asks for yet.
+- `AttendanceService.inactiveMembers` is a same-request computation (two
+  `groupBy` queries over the full check-in history), not a cached/
+  materialized view — fine at today's scale; worth revisiting once a
+  gym's check-in volume makes a full-history scan on every call worth
+  measuring.
+- `GET /attendance/stats` buckets by day only, with no week/month
+  granularity option server-side — the approved frontend's weekly/monthly
+  toggle is trivial to derive client-side from daily buckets (sum by ISO
+  week/month), so a second aggregation mode wasn't built until a real need
+  for server-side rollups appears.
+- Class/PT booking eligibility (`ClassBookingsService.book`/
+  `PtSessionsService.book`) still checks only `Member.status === ACTIVE`,
+  not real `MemberMembership` data — the same gap noted above, now shared
+  by two independent phases (Attendance's own check-in, and Finance's
+  revenue) that both *did* wire the real membership-eligibility check for
+  their own purposes. Worth revisiting Classes/Bookings to use the same
+  check.
+- No recurring-expense auto-generation — `frequency` on `Expense` is
+  descriptive metadata, not a template. See the Expenses & Financial
+  Overview section above for why this is a deliberate reading of what the
+  approved product actually demonstrates, not a partially-built feature.
+- `ExpenseCategory` is a fixed, product-defined enum — a gym can't define
+  its own custom categories (`OTHER` is the escape hatch). Revisiting this
+  would mean a per-tenant category table, a bigger shift than anything the
+  approved frontend's own fixed `ExpenseCategory` union asks for today.
+- No file/receipt attachment storage for expenses — matching this
+  backend's existing Invoice-PDF gap (see above), there's no file-storage
+  infrastructure anywhere in this backend yet to hook into; the approved
+  frontend's own receipt dialog is print/toast-only with no server
+  document behind it either.
+- `FinanceService.getTrend`'s month-bucketed series runs one pair of
+  aggregate queries per month (bounded at 12) rather than a single
+  date-bucketed query — simple and consistent with this codebase's
+  existing avoidance of raw SQL, but worth revisiting with a proper
+  date-bucketing query if the bound ever needs to grow well past a year.
+- `NotificationCategory.FINANCE` exists but nothing emits it yet — see the
+  Expenses & Financial Overview section above for why: the approved
+  product has no automated "unusual expense" alert concept to mirror, and
+  the unusual-category-increase detection the Financial Overview does
+  surface is a read-time insight, not a stored/triggered event.
