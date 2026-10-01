@@ -26,25 +26,29 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { BookPtDialog } from "@/components/portal/book-pt-dialog";
 import { useBookings } from "@/components/portal/bookings-provider";
 import { useMembership } from "@/components/portal/membership-provider";
-import { memberNotifications } from "@/lib/data/notifications";
-import { trainers } from "@/lib/data/trainers";
-import { attendanceRecords } from "@/lib/data/attendance";
+import { useOwnNotifications } from "@/hooks/use-notifications";
+import { useOwnAttendanceHistory } from "@/hooks/use-attendance";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatDate } from "@/lib/utils-data";
 import { formatOccurrence } from "@/lib/booking-helpers";
-import { DEMO_MEMBER_ID, getCurrentStreak, getVisitsInMonth } from "@/lib/attendance-helpers";
+import { getCurrentStreak, getVisitsInMonth } from "@/lib/attendance-helpers";
 
 const weeklyVisits = [3, 4, 2, 5, 4, 6, 3];
 
 export default function MemberDashboardPage() {
   const { myClassBookings, myPtSessions } = useBookings();
   const { member, daysLeft, isExpiringSoon, membershipBlock } = useMembership();
+  const { trainers } = useTrainersRoster();
+  const { data: notificationsData } = useOwnNotifications({ limit: 3 });
+  const { records: attendanceRecords } = useOwnAttendanceHistory();
   const [ptDialogOpen, setPtDialogOpen] = React.useState(false);
   const [ptPreselectTrainer, setPtPreselectTrainer] = React.useState<string | undefined>();
 
-  const favoriteTrainer = trainers[0];
+  const favoriteTrainer = trainers.find((t) => t.id === member.trainerId);
+  const memberNotifications = notificationsData?.items ?? [];
   const maxVisits = Math.max(...weeklyVisits);
-  const streak = getCurrentStreak(attendanceRecords, DEMO_MEMBER_ID);
-  const visitsThisMonth = getVisitsInMonth(attendanceRecords, DEMO_MEMBER_ID);
+  const streak = getCurrentStreak(attendanceRecords, member.id);
+  const visitsThisMonth = getVisitsInMonth(attendanceRecords, member.id);
 
   const upcomingClassItems = myClassBookings
     .filter((v) => v.booking.status === "booked")
@@ -77,14 +81,16 @@ export default function MemberDashboardPage() {
     .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     .slice(0, 3);
 
-  const nextWithFavorite = [
-    ...myClassBookings
-      .filter((v) => v.booking.status === "booked" && v.gymClass.trainerId === favoriteTrainer.id)
-      .map((v) => ({ label: `${formatOccurrence(v.gymClass.day, undefined, v.gymClass.date)} · ${v.gymClass.startTime}`, sortKey: `${v.occurrenceDate}${v.gymClass.startTime}` })),
-    ...myPtSessions
-      .filter((s) => s.status === "booked" && s.trainerId === favoriteTrainer.id)
-      .map((s) => ({ label: `${s.date} · ${s.startTime}`, sortKey: `${s.date}${s.startTime}` })),
-  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey))[0];
+  const nextWithFavorite = favoriteTrainer
+    ? [
+        ...myClassBookings
+          .filter((v) => v.booking.status === "booked" && v.gymClass.trainerId === favoriteTrainer.id)
+          .map((v) => ({ label: `${formatOccurrence(v.gymClass.day, undefined, v.gymClass.date)} · ${v.gymClass.startTime}`, sortKey: `${v.occurrenceDate}${v.gymClass.startTime}` })),
+        ...myPtSessions
+          .filter((s) => s.status === "booked" && s.trainerId === favoriteTrainer.id)
+          .map((s) => ({ label: `${s.date} · ${s.startTime}`, sortKey: `${s.date}${s.startTime}` })),
+      ].sort((a, b) => a.sortKey.localeCompare(b.sortKey))[0]
+    : undefined;
 
   function openPtBooking(trainerId?: string) {
     setPtPreselectTrainer(trainerId);
@@ -243,33 +249,45 @@ export default function MemberDashboardPage() {
             <CardTitle>Your coach</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-3">
-              <Avatar className="size-12">
-                <AvatarFallback>{favoriteTrainer.initials}</AvatarFallback>
-              </Avatar>
-              <div>
-                <p className="text-sm font-medium text-foreground">{favoriteTrainer.name}</p>
-                <p className="text-xs text-muted-foreground">{favoriteTrainer.role}</p>
-              </div>
-            </div>
-            <div className="mt-4 space-y-2 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <Clock className="size-4" />
-                {nextWithFavorite ? `Next session: ${nextWithFavorite.label}` : "No sessions booked yet"}
-              </div>
-              <div className="flex items-center gap-2">
-                <MapPin className="size-4" />
-                Strength Floor
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-4 w-full"
-              onClick={() => openPtBooking(favoriteTrainer.id)}
-            >
-              Book with {favoriteTrainer.name.split(" ")[0]}
-            </Button>
+            {favoriteTrainer ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <Avatar className="size-12">
+                    <AvatarFallback>{favoriteTrainer.initials}</AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{favoriteTrainer.name}</p>
+                    <p className="text-xs text-muted-foreground">{favoriteTrainer.role}</p>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <Clock className="size-4" />
+                    {nextWithFavorite ? `Next session: ${nextWithFavorite.label}` : "No sessions booked yet"}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="size-4" />
+                    Strength Floor
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4 w-full"
+                  onClick={() => openPtBooking(favoriteTrainer.id)}
+                >
+                  Book with {favoriteTrainer.name.split(" ")[0]}
+                </Button>
+              </>
+            ) : (
+              <EmptyState
+                icon={UserRound}
+                title="No trainer assigned yet"
+                description="Book a personal training session to get started with a coach."
+                action={{ label: "Book PT Session", onClick: () => openPtBooking() }}
+                className="border-0"
+              />
+            )}
           </CardContent>
         </Card>
       </div>

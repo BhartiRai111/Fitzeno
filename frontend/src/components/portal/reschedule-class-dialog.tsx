@@ -15,7 +15,7 @@ import { CapacityBar } from "@/components/shared/capacity-bar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { CalendarX2 } from "lucide-react";
 import { useBookings } from "@/components/portal/bookings-provider";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatOccurrence } from "@/lib/booking-helpers";
 import type { ClassBooking } from "@/lib/data/types";
 
@@ -27,6 +27,7 @@ interface RescheduleClassDialogProps {
 
 export function RescheduleClassDialog({ booking, open, onOpenChange }: RescheduleClassDialogProps) {
   const { classes, getStatusForClass, rescheduleClassBooking } = useBookings();
+  const { trainers } = useTrainersRoster();
 
   if (!booking) return null;
 

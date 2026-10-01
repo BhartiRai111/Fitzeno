@@ -18,7 +18,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { CalendarX2 } from "lucide-react";
 import { useBookings } from "@/components/portal/bookings-provider";
 import { useAvailableSlots } from "@/hooks/use-pt-sessions";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatDate } from "@/lib/utils-data";
 
 interface BookPtDialogProps {
@@ -41,6 +41,7 @@ const DATE_OPTIONS = nextDays(7);
 
 export function BookPtDialog({ open, onOpenChange, preselectedTrainerId }: BookPtDialogProps) {
   const { bookPt } = useBookings();
+  const { trainers } = useTrainersRoster();
   const [trainerId, setTrainerId] = React.useState<string | null>(preselectedTrainerId ?? null);
   const [date, setDate] = React.useState(DATE_OPTIONS[0]!);
   const [submitting, setSubmitting] = React.useState(false);

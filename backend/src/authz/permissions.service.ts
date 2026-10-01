@@ -19,12 +19,21 @@ export class PermissionsService {
     return this.mergeOverrides(role, overrides);
   }
 
-  /** Same computation, for a caller that already has the overrides loaded (avoids a redundant query). */
+  /**
+   * Same computation, for a caller that already has the overrides loaded (avoids a redundant query).
+   * MEMBER never participates in the area-permission system (see role-permissions.const.ts) — any
+   * PermissionOverride row somehow stored against a MEMBER user is ignored here rather than trusted,
+   * so a bad write (or a future bug in the admin tooling that creates overrides) can never actually
+   * grant a member elevated access; NO_ACCESS defaults win unconditionally for that role.
+   */
   mergeOverrides(
     role: UserRole,
     overrides: { area: PermissionArea; level: PermissionLevel }[],
   ): Record<PermissionArea, PermissionLevel> {
     const effective = { ...ROLE_DEFAULT_PERMISSIONS[role] };
+    if (role === UserRole.MEMBER) {
+      return effective;
+    }
     for (const override of overrides) {
       effective[override.area] = override.level;
     }

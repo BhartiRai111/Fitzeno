@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CapacityBar } from "@/components/shared/capacity-bar";
 import { useBookings } from "@/components/portal/bookings-provider";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatOccurrence } from "@/lib/booking-helpers";
 import type { GymClass } from "@/lib/data/types";
 
@@ -27,6 +27,7 @@ interface PortalClassCardProps {
 
 export function PortalClassCard({ gymClass, onOpen }: PortalClassCardProps) {
   const { classes, getStatusForClass, getWaitlistPosition } = useBookings();
+  const { trainers } = useTrainersRoster();
   const live = classes.find((c) => c.id === gymClass.id) ?? gymClass;
   const trainer = trainers.find((t) => t.id === live.trainerId);
   const status = getStatusForClass(live.id);

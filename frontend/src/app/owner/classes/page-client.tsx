@@ -18,9 +18,9 @@ import { ClassDialog } from "@/components/dashboard/dialogs/class-dialog";
 import { ConfirmActionDialog } from "@/components/dashboard/dialogs/confirm-action-dialog";
 import { useClassSeriesRoster, useClassOccurrences } from "@/hooks/use-classes";
 import { useClassBookingsRoster, useCancelClassBooking, usePromoteClassBooking } from "@/hooks/use-class-bookings";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { toInitials } from "@/lib/api/enum-maps";
 import { ApiError, NetworkError } from "@/lib/api/types";
-import { trainers } from "@/lib/data/trainers";
 import { formatDate } from "@/lib/utils-data";
 
 type TabValue = "calendar" | "classes" | "bookings" | "waitlist";
@@ -50,6 +50,7 @@ export function ClassesPageClient() {
   const { classes: weekOccurrences } = useClassOccurrences({ from: todayIso, to: weekEndIso });
   const { classes: twoWeekOccurrences } = useClassOccurrences({ from: todayIso, to: twoWeekEndIso });
   const { raw: bookings, isLoading: bookingsLoading } = useClassBookingsRoster({ limit: 200 });
+  const { trainers } = useTrainersRoster();
 
   const cancelBooking = useCancelClassBooking();
   const promoteBooking = usePromoteClassBooking();

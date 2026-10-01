@@ -2,7 +2,7 @@ import { Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ClassDialog } from "@/components/dashboard/dialogs/class-dialog";
 import { daysOfWeek } from "@/lib/data/classes";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import type { GymClass } from "@/lib/data/types";
 
 const typeAccent: Record<string, string> = {
@@ -16,6 +16,7 @@ const typeAccent: Record<string, string> = {
 };
 
 export function WeekCalendar({ classes }: { classes: GymClass[] }) {
+  const { trainers } = useTrainersRoster();
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-7">
       {daysOfWeek.map((day) => {

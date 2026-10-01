@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { daysOfWeek } from "@/lib/data/classes";
 import { useCreateClassSeries, useUpdateClassSeries, type CreateClassInput } from "@/hooks/use-classes";
 import { ApiError, NetworkError } from "@/lib/api/types";
@@ -34,8 +34,9 @@ interface ClassDialogProps {
 }
 
 export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
+  const { trainers } = useTrainersRoster();
   const [open, setOpen] = React.useState(false);
-  const [trainerId, setTrainerId] = React.useState(gymClass?.trainerId ?? trainers[0].id);
+  const [trainerId, setTrainerId] = React.useState(gymClass?.trainerId ?? trainers[0]?.id ?? "");
   const [day, setDay] = React.useState<GymClass["day"]>(gymClass?.day ?? "Mon");
   const [startTime, setStartTime] = React.useState(gymClass?.startTime ?? "09:00");
   const [duration, setDuration] = React.useState(gymClass?.duration ?? 45);
@@ -49,14 +50,14 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
     // Intentional: reset the form to the target class's values each time this dialog reopens.
     /* eslint-disable react-hooks/set-state-in-effect */
     if (open) {
-      setTrainerId(gymClass?.trainerId ?? trainers[0].id);
+      setTrainerId(gymClass?.trainerId ?? trainers[0]?.id ?? "");
       setDay(gymClass?.day ?? "Mon");
       setStartTime(gymClass?.startTime ?? "09:00");
       setDuration(gymClass?.duration ?? 45);
     }
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, trainers]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -118,8 +119,8 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
             </div>
             <div className="space-y-1.5">
               <Label>Trainer</Label>
-              <Select value={trainerId} onValueChange={setTrainerId}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select value={trainerId} onValueChange={setTrainerId} disabled={trainers.length === 0}>
+                <SelectTrigger><SelectValue placeholder="No trainers yet" /></SelectTrigger>
                 <SelectContent>
                   {trainers.map((t) => (
                     <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
@@ -180,7 +181,7 @@ export function ClassDialog({ gymClass, trigger }: ClassDialogProps) {
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" loading={submitting}>
+            <Button type="submit" loading={submitting} disabled={!trainerId}>
               {isEdit ? "Save Changes" : "Create Class"}
             </Button>
           </DialogFooter>

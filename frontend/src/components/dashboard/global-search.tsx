@@ -10,8 +10,9 @@ import { cn } from "@/lib/utils";
 import { members } from "@/lib/data/members";
 import { leads } from "@/lib/data/leads";
 import { staffMembers } from "@/lib/data/staff";
-import { trainers } from "@/lib/data/trainers";
 import { gymClasses } from "@/lib/data/classes";
+import { useTrainersRoster } from "@/hooks/use-trainers";
+import type { Trainer } from "@/lib/data/types";
 
 interface SearchResult {
   id: string;
@@ -22,7 +23,7 @@ interface SearchResult {
   href: string;
 }
 
-function buildIndex(role: "owner" | "member" | "trainer"): SearchResult[] {
+function buildIndex(role: "owner" | "member" | "trainer", trainers: Trainer[]): SearchResult[] {
   if (role === "owner") {
     return [
       ...members.map((m) => ({
@@ -98,7 +99,8 @@ interface GlobalSearchProps {
 
 export function GlobalSearch({ role, placeholder = "Search..." }: GlobalSearchProps) {
   const router = useRouter();
-  const index = React.useMemo(() => buildIndex(role), [role]);
+  const { trainers } = useTrainersRoster();
+  const index = React.useMemo(() => buildIndex(role, trainers), [role, trainers]);
   const [query, setQuery] = React.useState("");
   const [activeIndex, setActiveIndex] = React.useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);

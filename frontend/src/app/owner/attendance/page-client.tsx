@@ -36,14 +36,12 @@ import { MonthlyAttendanceChart } from "@/components/dashboard/charts/monthly-at
 import { AtRiskMembers } from "@/components/dashboard/at-risk-members";
 import { useMembersRoster } from "@/hooks/use-members";
 import { useAttendanceToday, useAttendanceHistory, useInactiveMembers, useManualCheckIn } from "@/hooks/use-attendance";
+import { useClassOccurrences } from "@/hooks/use-classes";
+import { useClassBookingsRoster } from "@/hooks/use-class-bookings";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { weeklyAttendance } from "@/lib/data/attendance";
-import { gymClasses } from "@/lib/data/classes";
-import { classBookings } from "@/lib/data/class-bookings";
-import { trainers } from "@/lib/data/trainers";
 import { TODAY, getMembershipBlock } from "@/lib/attendance-helpers";
 import { ApiError, NetworkError } from "@/lib/api/types";
-
-const TODAY_DAY = "Mon" as const;
 
 type TabValue = "today" | "history" | "insights" | "checkin";
 type TrendView = "weekly" | "monthly";
@@ -56,6 +54,11 @@ export function AttendancePageClient() {
 
   const { members } = useMembersRoster();
   const { records: todaysRecords, totalToday, currentlyIn, isLoading: todayLoading } = useAttendanceToday();
+  const { trainers } = useTrainersRoster();
+
+  const todayIso = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { classes: todaysClasses } = useClassOccurrences({ from: todayIso, to: todayIso });
+  const { raw: todaysBookings } = useClassBookingsRoster({ limit: 200 });
 
   const [historyDate, setHistoryDate] = React.useState(TODAY);
   const [memberFilter, setMemberFilter] = React.useState("all");
@@ -81,12 +84,13 @@ export function AttendancePageClient() {
 
   const weeklyAvg = Math.round(weeklyAttendance.reduce((sum, d) => sum + d.visits, 0) / weeklyAttendance.length);
 
-  const todaysClasses = gymClasses.filter((c) => c.day === TODAY_DAY);
   const classAttendance = todaysClasses.map((c) => {
-    const roster = classBookings.filter((b) => b.classId === c.id && b.status !== "cancelled" && b.status !== "waitlisted");
-    const attended = roster.filter((b) => b.status === "attended").length;
-    const noShow = roster.filter((b) => b.status === "no-show").length;
-    const pending = roster.filter((b) => b.status === "booked").length;
+    const roster = todaysBookings.filter(
+      (b) => b.classOccurrence.id === c.id && b.status !== "CANCELLED" && b.status !== "WAITLISTED",
+    );
+    const attended = roster.filter((b) => b.status === "ATTENDED").length;
+    const noShow = roster.filter((b) => b.status === "NO_SHOW").length;
+    const pending = roster.filter((b) => b.status === "CONFIRMED").length;
     return { gymClass: c, roster, attended, noShow, pending };
   });
 

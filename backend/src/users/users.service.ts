@@ -217,7 +217,10 @@ export class UsersService {
     userId: string,
     overrides: { area: PermissionArea; level: PermissionLevel }[],
   ): Promise<void> {
-    await this.findByIdInTenant(tenantId, userId);
+    const target = await this.findByIdInTenant(tenantId, userId);
+    if (target.role === UserRole.MEMBER) {
+      throw new BadRequestException('Member accounts do not use the staff permission system.');
+    }
     await this.prisma.$transaction([
       this.prisma.permissionOverride.deleteMany({ where: { userId } }),
       ...(overrides.length > 0

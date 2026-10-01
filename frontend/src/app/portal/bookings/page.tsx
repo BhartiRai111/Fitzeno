@@ -20,7 +20,7 @@ import { RescheduleClassDialog } from "@/components/portal/reschedule-class-dial
 import { BookPtDialog } from "@/components/portal/book-pt-dialog";
 import { ClassDetailSheet } from "@/components/portal/class-detail-sheet";
 import { useBookings } from "@/components/portal/bookings-provider";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatOccurrence, isWithinCancellationWindow } from "@/lib/booking-helpers";
 import { formatDate } from "@/lib/utils-data";
 import type { ClassBooking, GymClass } from "@/lib/data/types";
@@ -29,6 +29,7 @@ type TabValue = "upcoming" | "waitlisted" | "past";
 
 export default function PortalBookingsPage() {
   const { myClassBookings, myPtSessions, cancelClassBooking, cancelPt } = useBookings();
+  const { trainers } = useTrainersRoster();
   const [tab, setTab] = React.useState<TabValue>("upcoming");
   const [rescheduleTarget, setRescheduleTarget] = React.useState<ClassBooking | null>(null);
   const [rescheduleOpen, setRescheduleOpen] = React.useState(false);

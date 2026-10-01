@@ -14,7 +14,7 @@ import { CapacityBar } from "@/components/shared/capacity-bar";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useBookings } from "@/components/portal/bookings-provider";
 import { useMembership } from "@/components/portal/membership-provider";
-import { trainers } from "@/lib/data/trainers";
+import { useTrainersRoster } from "@/hooks/use-trainers";
 import { formatOccurrence } from "@/lib/booking-helpers";
 import type { GymClass } from "@/lib/data/types";
 
@@ -29,6 +29,7 @@ export function ClassDetailSheet({ gymClass, open, onOpenChange }: ClassDetailSh
   const { classes, myClassBookings, getStatusForClass, getWaitlistPosition, bookClass, cancelClassBooking } =
     useBookings();
   const { membershipBlock } = useMembership();
+  const { trainers } = useTrainersRoster();
   const [justBooked, setJustBooked] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
 

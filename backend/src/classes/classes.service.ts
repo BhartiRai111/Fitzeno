@@ -347,7 +347,14 @@ export class ClassesService {
   // ClassOccurrence
   // ---------------------------------------------------------------------
 
-  /** Idempotent — safe to call on every browse/list request. */
+  /**
+   * Idempotent — safe to call on every browse/list request. Every active
+   * series' rows are flattened into a single `createMany` rather than one
+   * call per series: this runs on every `GET /classes`, so with N active
+   * series that's the difference between 1 write round-trip and N per
+   * request — `skipDuplicates` already makes repeat calls free of
+   * duplicate rows, but each call was still its own round-trip to Postgres.
+   */
   async ensureOccurrencesGenerated(tenantId: string, from: Date, to: Date): Promise<void> {
     const activeSeries = await this.prisma.classSeries.findMany({
       where: {
@@ -358,25 +365,23 @@ export class ClassesService {
       },
     });
 
-    for (const series of activeSeries) {
-      const dates = datesForSeries(series, from, to);
-      if (dates.length === 0) {
-        continue;
-      }
-      await this.prisma.classOccurrence.createMany({
-        data: dates.map((date) => ({
-          tenantId,
-          classSeriesId: series.id,
-          date,
-          startTime: series.startTime,
-          endTime: addMinutesToTime(series.startTime, series.durationMinutes),
-          trainerId: series.trainerId,
-          location: series.location,
-          capacity: series.capacity,
-        })),
-        skipDuplicates: true,
-      });
+    const rows = activeSeries.flatMap((series) =>
+      datesForSeries(series, from, to).map((date) => ({
+        tenantId,
+        classSeriesId: series.id,
+        date,
+        startTime: series.startTime,
+        endTime: addMinutesToTime(series.startTime, series.durationMinutes),
+        trainerId: series.trainerId,
+        location: series.location,
+        capacity: series.capacity,
+      })),
+    );
+
+    if (rows.length === 0) {
+      return;
     }
+    await this.prisma.classOccurrence.createMany({ data: rows, skipDuplicates: true });
   }
 
   async listOccurrences(

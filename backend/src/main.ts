@@ -8,7 +8,12 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   configureApp(app, configService);
-  setupSwagger(app);
+  // Kept out of production — an unauthenticated, fully browsable API schema
+  // is unnecessary reconnaissance surface for a public deployment; local/dev
+  // and any internal-only environment still get it.
+  if (!configService.get<boolean>('app.isProduction')) {
+    setupSwagger(app);
+  }
 
   const port = configService.get<number>('app.port')!;
   await app.listen(port);
